@@ -5,9 +5,6 @@ const Canvas = () => {
   const canvasElRef = useRef<HTMLCanvasElement>(null);
   const fabricRef = useRef<FabricCanvas | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const isPanning = useRef(false);
-  const isSpacePressed = useRef(false); // ← useRef not let
-  const lastPos = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     if (!canvasElRef.current || !containerRef.current) return;
@@ -15,16 +12,21 @@ const Canvas = () => {
     const container = containerRef.current;
     const { width, height } = container.getBoundingClientRect();
 
+    let isPanning = false;
+    let isSpacePressed = false;
+    let lastPos = { x: 0, y: 0 };
+
     const canvas = new FabricCanvas(canvasElRef.current, {
       width,
       height,
-      backgroundColor: "#1a1a2e",
+      backgroundColor: "#ffffff",
       selection: false,
     });
 
     fabricRef.current = canvas;
 
-    // Zoom with scroll wheel
+    canvas.renderAll();
+
     canvas.on("mouse:wheel", (opt) => {
       const delta = opt.e.deltaY;
       let zoom = canvas.getZoom();
@@ -37,34 +39,31 @@ const Canvas = () => {
 
     canvas.on("mouse:down", (opt) => {
       const e = opt.e as MouseEvent;
-      if (e.button === 1 || (e.button === 0 && isSpacePressed.current)) {
-        isPanning.current = true;
-        lastPos.current = { x: e.clientX, y: e.clientY };
+      if (e.button === 1 || (e.button === 0 && isSpacePressed)) {
+        isPanning = true;
+        lastPos = { x: e.clientX, y: e.clientY };
       }
     });
 
     canvas.on("mouse:move", (opt) => {
-      if (!isPanning.current) return;
+      if (!isPanning) return;
       const e = opt.e as MouseEvent;
       const vpt = canvas.viewportTransform;
       if (!vpt) return;
-      vpt[4] += e.clientX - lastPos.current.x;
-      vpt[5] += e.clientY - lastPos.current.y;
+      vpt[4] += e.clientX - lastPos.x;
+      vpt[5] += e.clientY - lastPos.y;
       canvas.requestRenderAll();
-      lastPos.current = { x: e.clientX, y: e.clientY };
+      lastPos = { x: e.clientX, y: e.clientY };
     });
 
     canvas.on("mouse:up", () => {
-      isPanning.current = false;
-      if (canvas.viewportTransform) {
-        canvas.setViewportTransform(canvas.viewportTransform);
-      }
+      isPanning = false;
     });
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Space") {
         e.preventDefault();
-        isSpacePressed.current = true; // ← actually set it
+        isSpacePressed = true;
         canvas.defaultCursor = "grab";
         canvas.renderAll();
       }
@@ -72,7 +71,7 @@ const Canvas = () => {
 
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.code === "Space") {
-        isSpacePressed.current = false; // ← actually reset it
+        isSpacePressed = false;
         canvas.defaultCursor = "default";
         canvas.renderAll();
       }
@@ -89,6 +88,7 @@ const Canvas = () => {
 
     window.addEventListener("resize", handleResize);
 
+    //Cleanup
     return () => {
       window.removeEventListener("resize", handleResize);
       window.removeEventListener("keydown", handleKeyDown);
