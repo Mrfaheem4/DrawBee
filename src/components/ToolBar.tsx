@@ -3,6 +3,7 @@ import { MousePointer2, Pencil, Type, StickyNote, Eraser } from "lucide-react";
 import ColorPickerPopup from "./ColorPickerPopup";
 
 const tools: { id: Tool; icon: React.ReactNode; label: string }[] = [
+  { id: "select", icon: <MousePointer2 size={20} />, label: "Select" },
   { id: "pen", icon: <Pencil size={20} />, label: "Pen" },
   { id: "text", icon: <Type size={20} />, label: "Text" },
   { id: "sticky", icon: <StickyNote size={20} />, label: "Sticky" },
