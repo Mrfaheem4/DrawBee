@@ -2,7 +2,7 @@ import Canvas from "./Canvas";
 
 const CanvasArea = () => {
   return (
-    <div className="flex-1 overflow-hidden">
+    <div id="whiteboard-container" className="flex-1 overflow-hidden">
       <Canvas />
     </div>
   );

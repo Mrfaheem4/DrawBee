@@ -1,5 +1,6 @@
 import { useCanvas, type Tool } from "../context/CanvasContext";
 import { MousePointer2, Pencil, Type, StickyNote, Eraser } from "lucide-react";
+import ColorPickerPopup from "./ColorPickerPopup";
 
 const tools: { id: Tool; icon: React.ReactNode; label: string }[] = [
   { id: "select", icon: <MousePointer2 size={20} />, label: "Select" },
@@ -14,6 +15,7 @@ const Toolbar = () => {
 
   return (
     <div className="w-16 bg-gray-900 border-r border-gray-700 flex flex-col items-center py-6 gap-1">
+      {/* Tools */}
       {tools.map((tool) => (
         <button
           key={tool.id}
@@ -31,6 +33,12 @@ const Toolbar = () => {
           {tool.icon}
         </button>
       ))}
+
+      {/* Divider */}
+      <div className="w-8 h-px bg-gray-700 my-2" />
+
+      {/* Color Picker */}
+      <ColorPickerPopup />
     </div>
   );
 };

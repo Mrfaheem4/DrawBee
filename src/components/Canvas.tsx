@@ -6,19 +6,27 @@ import { EraserBrush } from "@erase2d/fabric";
 const Canvas = () => {
   const canvasElRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { fabricRef, activeTool } = useCanvas();
+  const { fabricRef, activeTool, strokeColor, strokeWidth } = useCanvas();
+
   const mouseDownRef = useRef<((opt: any) => void) | null>(null);
   const activeToolRef = useRef<Tool>(activeTool);
+  const strokeColorRef = useRef(strokeColor);
+  const strokeWidthRef = useRef(strokeWidth);
   const isSpacePressedRef = useRef(false);
   const isPanningRef = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
 
-  // Sync activeTool state with a ref to avoid stale closure scopes inside the listeners
+  // Sync refs to latest values
   useEffect(() => {
     activeToolRef.current = activeTool;
   }, [activeTool]);
 
-  // Main Canvas Setup Loop
+  useEffect(() => {
+    strokeColorRef.current = strokeColor;
+    strokeWidthRef.current = strokeWidth;
+  }, [strokeColor, strokeWidth]);
+
+  // Main Canvas Setup
   useEffect(() => {
     if (!canvasElRef.current || !containerRef.current) return;
 
@@ -34,31 +42,47 @@ const Canvas = () => {
 
     fabricRef.current = canvas;
 
-    // FIX: Automatically mark all paths added to the canvas as erasable
     canvas.on("object:added", (options) => {
-      if (options.target) {
-        options.target.set({ erasable: true });
-      }
+      const target = options.target;
+      if (!target) return;
+      // Skip internal eraser objects to prevent flash
+      if (
+        target.type === "eraser" ||
+        (target as any).isEraser ||
+        (target as any)._isErasing
+      )
+        return;
+      target.set({ erasable: true });
+    });
+
+    // Force clean render after erase commits
+    canvas.on("erasing:end" as any, () => {
+      canvas.requestRenderAll();
     });
 
     canvas.renderAll();
 
-    // Zoom Handling
     canvas.on("mouse:wheel", (opt) => {
+      // Don't zoom while erasing
+      if (activeToolRef.current === "eraser" && canvas.isDrawingMode) {
+        opt.e.preventDefault();
+        opt.e.stopPropagation();
+        return;
+      }
+
       const delta = opt.e.deltaY;
       let zoom = canvas.getZoom();
-      zoom *= 0.999 ** delta;
+      zoom *= 0.95 ** delta;
       zoom = Math.min(Math.max(zoom, 0.1), 10);
       canvas.zoomToPoint(new Point(opt.e.offsetX, opt.e.offsetY), zoom);
       opt.e.preventDefault();
       opt.e.stopPropagation();
     });
 
-    // Global Mouse Down Listener
+    // Mouse Down
     canvas.on("mouse:down", (opt) => {
       const e = opt.e as MouseEvent;
 
-      // FIX: If the user is editing text, do NOT trigger mouse-down panning mechanics
       const activeObj = canvas.getActiveObject();
       if (activeObj && activeObj instanceof IText && activeObj.isEditing) {
         return;
@@ -67,18 +91,15 @@ const Canvas = () => {
       if (e.button === 1 || (e.button === 0 && isSpacePressedRef.current)) {
         isPanningRef.current = true;
         lastPosRef.current = { x: e.clientX, y: e.clientY };
-
-        // Temporarily disable drawing tools while panning active
         canvas.isDrawingMode = false;
         canvas.discardActiveObject();
         canvas.requestRenderAll();
-
         opt.e.stopPropagation();
         opt.e.preventDefault();
       }
     });
 
-    // Global Mouse Move Panning Logic
+    // Mouse Move — panning
     canvas.on("mouse:move", (opt) => {
       if (!isPanningRef.current) return;
       opt.e.stopPropagation();
@@ -90,19 +111,14 @@ const Canvas = () => {
 
       vpt[4] += e.clientX - lastPosRef.current.x;
       vpt[5] += e.clientY - lastPosRef.current.y;
-
-      // Safely reset view matrix bounds
       canvas.setViewportTransform(vpt);
-
       lastPosRef.current = { x: e.clientX, y: e.clientY };
     });
 
-    // Global Mouse Up
+    // Mouse Up
     canvas.on("mouse:up", () => {
       if (isPanningRef.current) {
         isPanningRef.current = false;
-
-        // Restore drawing state cleanly back to active brushes
         if (
           activeToolRef.current === "pen" ||
           activeToolRef.current === "eraser"
@@ -112,26 +128,30 @@ const Canvas = () => {
       }
     });
 
-    // Keyboard Spacebar Listeners
+    // Keyboard
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.code === "Space") {
         const activeObj = canvas.getActiveObject();
         const isTyping =
           activeObj && activeObj instanceof IText && activeObj.isEditing;
-
-        if (isTyping) {
-          // Allow space to be typed normally inside text boxes without firing pan mode
-          return;
-        }
+        if (isTyping) return;
 
         e.preventDefault();
         isSpacePressedRef.current = true;
         canvas.defaultCursor = "grab";
-
-        if (canvas.isDrawingMode) {
-          canvas.isDrawingMode = false;
-        }
+        if (canvas.isDrawingMode) canvas.isDrawingMode = false;
         canvas.renderAll();
+      }
+
+      // Delete selected object
+      if (e.code === "Delete" || e.code === "Backspace") {
+        const activeObj = canvas.getActiveObject();
+        if (activeObj && activeObj instanceof IText && activeObj.isEditing)
+          return;
+        if (activeObj) {
+          canvas.remove(activeObj);
+          canvas.requestRenderAll();
+        }
       }
     };
 
@@ -140,10 +160,7 @@ const Canvas = () => {
         const activeObj = canvas.getActiveObject();
         const isTyping =
           activeObj && activeObj instanceof IText && activeObj.isEditing;
-
-        if (isTyping) {
-          return;
-        }
+        if (isTyping) return;
 
         isSpacePressedRef.current = false;
         isPanningRef.current = false;
@@ -169,7 +186,7 @@ const Canvas = () => {
     window.addEventListener("keydown", handleKeyDown);
     window.addEventListener("keyup", handleKeyUp);
 
-    // Responsive Window Resize Handler
+    // Resize
     const handleResize = () => {
       const { width, height } = container.getBoundingClientRect();
       canvas.setDimensions({ width, height });
@@ -186,18 +203,16 @@ const Canvas = () => {
     };
   }, []);
 
-  // Reactive Effect Block for Tool Selection Swapping Actions
+  // Tool switching
   useEffect(() => {
     const canvas = fabricRef.current;
     if (!canvas) return;
 
-    // Detach any existing tool-specific clicks cleanly
     if (mouseDownRef.current) {
       canvas.off("mouse:down", mouseDownRef.current);
       mouseDownRef.current = null;
     }
 
-    // Mode 1: Select/Transform Arrow Mode
     if (activeTool === "select") {
       canvas.isDrawingMode = false;
       canvas.selection = true;
@@ -206,20 +221,15 @@ const Canvas = () => {
         obj.selectable = true;
         obj.evented = true;
       });
-
-      // Mode 2: Drawing Pencil Brush Mode
     } else if (activeTool === "pen") {
       canvas.isDrawingMode = !isSpacePressedRef.current;
       canvas.selection = false;
 
       const brush = new PencilBrush(canvas);
-      brush.color = "#000000";
-      brush.width = 3;
-
+      brush.color = strokeColorRef.current;
+      brush.width = strokeWidthRef.current;
       canvas.freeDrawingBrush = brush;
       canvas.defaultCursor = "crosshair";
-
-      // Mode 3: Interactive Text Field Mode
     } else if (activeTool === "text") {
       canvas.isDrawingMode = false;
       canvas.selection = false;
@@ -230,13 +240,10 @@ const Canvas = () => {
         const e = opt.e as MouseEvent;
         if (e.button !== 0) return;
 
-        // FIX: Check if an object is already actively being edited
         const activeObj = canvas.getActiveObject();
-        if (activeObj && activeObj instanceof IText && activeObj.isEditing) {
+        if (activeObj && activeObj instanceof IText && activeObj.isEditing)
           return;
-        }
 
-        // Check if clicking on existing text to edit it
         const clickedObject = opt.target;
         if (clickedObject && clickedObject instanceof IText) {
           canvas.setActiveObject(clickedObject);
@@ -246,7 +253,6 @@ const Canvas = () => {
           return;
         }
 
-        // Create new text box if no text clicked
         const rect = canvasElRef.current!.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
@@ -261,7 +267,7 @@ const Canvas = () => {
           left: pointer.x,
           top: pointer.y,
           fontSize: 20,
-          fill: "#000000",
+          fill: strokeColorRef.current,
           fontFamily: "sans-serif",
           editable: true,
         });
@@ -274,20 +280,14 @@ const Canvas = () => {
 
       mouseDownRef.current = handleTextClick;
       canvas.on("mouse:down", handleTextClick);
-
-      // Mode 4: @erase2d/fabric Dynamic Eraser Mode
     } else if (activeTool === "eraser") {
       canvas.isDrawingMode = !isSpacePressedRef.current;
       canvas.selection = false;
       canvas.defaultCursor = "crosshair";
 
-      // Initialize the customized eraser logic extension safely
       const eraser = new EraserBrush(canvas);
       eraser.width = 20;
-
       canvas.freeDrawingBrush = eraser;
-
-      // Fallback/Default Tool Catch
     } else {
       canvas.isDrawingMode = false;
       canvas.selection = false;
@@ -299,7 +299,20 @@ const Canvas = () => {
     }
 
     canvas.requestRenderAll();
-  }, [activeTool]);
+  }, [activeTool, strokeColor, strokeWidth]);
+
+  // Sync color/width to active brush in real time
+  useEffect(() => {
+    const canvas = fabricRef.current;
+    if (!canvas || !canvas.freeDrawingBrush) return;
+    if (activeTool === "pen") {
+      canvas.freeDrawingBrush.color = strokeColor;
+      canvas.freeDrawingBrush.width = strokeWidth;
+
+      console.log("Color sync firing:", strokeColor, activeTool);
+    }
+    // eraser intentionally excluded
+  }, [strokeColor, strokeWidth, activeTool]);
 
   return (
     <div ref={containerRef} className="w-full h-full">

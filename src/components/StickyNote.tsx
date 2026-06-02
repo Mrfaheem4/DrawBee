@@ -1,14 +1,5 @@
 import React, { useState, useEffect } from "react";
 
-/**
- * Enhanced StickyNote Component
- * Features:
- * - Multiple color themes
- * - Dynamic rotation and hover effects
- * - Responsive wider layout
- * - Realistic paper curl and pin
- */
-
 type NoteColor = "yellow" | "blue" | "green" | "pink" | "orange" | "purple";
 
 interface ColorConfig {
@@ -85,7 +76,7 @@ const StickyNote: React.FC<StickyNoteProps> = ({
 
   // Add a slight random rotation for a "dynamic" look on mount
   useEffect(() => {
-    const randomRot = Math.random() * 4 - 2; // -2 to +2 degrees
+    const randomRot = Math.random() * 4 - 2;
     setRotation(randomRot);
   }, []);
 
@@ -209,7 +200,7 @@ const StickyNote: React.FC<StickyNoteProps> = ({
         />
       </div>
 
-      {/* Style for hover effects (simulated since we can't use real CSS files easily here) */}
+      {/* Style for hover effects */}
       <style>{`
         .group:hover {
           transform: rotate(0deg) translateY(-8px) scale(1.02) !important;
