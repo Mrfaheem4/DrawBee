@@ -1,4 +1,4 @@
-import { exportAsPNG, exportAsJPEG, exportAsSVG } from "../utils/export";
+// import { exportAsPNG, exportAsJPEG, exportAsSVG } from "../utils/export";
 import { Download } from "lucide-react";
 
 const TopBar = () => {

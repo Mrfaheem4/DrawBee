@@ -4,13 +4,14 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
-import { Canvas as FabricCanvas } from "fabric";
 
 export type Tool = "select" | "pen" | "text" | "sticky" | "eraser";
 
 interface CanvasContextType {
-  fabricRef: React.RefObject<FabricCanvas | null>;
+  // Swapped from FabricCanvas to any to store Konva's Stage reference smoothly
+  fabricRef: RefObject<any>;
   activeTool: Tool;
   setActiveTool: (tool: Tool) => void;
   strokeColor: string;
@@ -22,7 +23,8 @@ interface CanvasContextType {
 const CanvasContext = createContext<CanvasContextType | null>(null);
 
 export const CanvasProvider = ({ children }: { children: ReactNode }) => {
-  const fabricRef = useRef<FabricCanvas | null>(null);
+  // Holds the Konva Stage reference instance instead of old Fabric layers
+  const fabricRef = useRef<any>(null);
   const [activeTool, setActiveTool] = useState<Tool>("select");
   const [strokeColor, setStrokeColor] = useState("#000000");
   const [strokeWidth, setStrokeWidth] = useState(3);
