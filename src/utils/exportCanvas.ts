@@ -1,6 +1,11 @@
 import { toCanvas } from "html-to-image";
 
-type ExportFormat = "png" | "jpeg" | "svg";
+export type ExportFormat = "png" | "jpeg" | "svg";
+
+interface Point {
+  x: number;
+  y: number;
+}
 
 interface StickyNoteItem {
   id: string;
@@ -12,15 +17,25 @@ interface StickyNoteItem {
   rotation: number;
 }
 
+interface TextBox {
+  id: string;
+  x: number;
+  y: number;
+  width: number;
+}
+
 interface ExportOptions {
   format: ExportFormat;
   containerRef: React.RefObject<HTMLDivElement | null>;
   stageRef: React.MutableRefObject<any>;
   stickyNotes: StickyNoteItem[];
-  lines: any[]; // Added lines to calculate full bounds
+  lines: any[];
+  textBoxes: any[];
   scale: number;
-  position: { x: number; y: number };
+  position: Point;
   dimensions: { width: number; height: number };
+  setScale: (s: number) => void;
+  setPosition: (p: Point) => void;
 }
 
 function triggerDownload(href: string, filename: string): void {
@@ -32,16 +47,16 @@ function triggerDownload(href: string, filename: string): void {
   document.body.removeChild(a);
 }
 
-/**
- * Calculates the bounding box of all content in world coordinates
- */
-function getFullContentBounds(stickyNotes: StickyNoteItem[], lines: any[]) {
+function getContentBounds(
+  stickyNotes: StickyNoteItem[],
+  lines: any[],
+  textBoxes: any[],
+) {
   let minX = Infinity,
     minY = Infinity,
     maxX = -Infinity,
     maxY = -Infinity;
 
-  // Check Sticky Notes (assuming standard size 320x300)
   stickyNotes.forEach((note) => {
     minX = Math.min(minX, note.x);
     minY = Math.min(minY, note.y);
@@ -49,7 +64,6 @@ function getFullContentBounds(stickyNotes: StickyNoteItem[], lines: any[]) {
     maxY = Math.max(maxY, note.y + 300);
   });
 
-  // Check Drawing Lines
   lines.forEach((line) => {
     for (let i = 0; i < line.points.length; i += 2) {
       minX = Math.min(minX, line.points[i]);
@@ -59,11 +73,16 @@ function getFullContentBounds(stickyNotes: StickyNoteItem[], lines: any[]) {
     }
   });
 
-  // Fallback if empty
+  textBoxes.forEach((tb) => {
+    minX = Math.min(minX, tb.x);
+    minY = Math.min(minY, tb.y);
+    maxX = Math.max(maxX, tb.x + tb.width);
+    maxY = Math.max(maxY, tb.y + 100);
+  });
+
   if (minX === Infinity) return { x: 0, y: 0, width: 800, height: 600 };
 
-  // Add some padding
-  const padding = 50;
+  const padding = 60;
   return {
     x: minX - padding,
     y: minY - padding,
@@ -72,44 +91,72 @@ function getFullContentBounds(stickyNotes: StickyNoteItem[], lines: any[]) {
   };
 }
 
-async function exportRaster(options: ExportOptions): Promise<void> {
-  const { containerRef, stickyNotes, lines, format, scale, position } = options;
-  const container = containerRef.current;
-  if (!container) return;
+export async function exportCanvas(options: ExportOptions): Promise<void> {
+  const {
+    format,
+    containerRef,
+    stageRef,
+    stickyNotes,
+    lines,
+    textBoxes,
+    scale,
+    position,
+    setScale,
+    setPosition,
+  } = options;
 
-  const bounds = getFullContentBounds(stickyNotes, lines);
+  const container = containerRef.current;
+  const stage = stageRef.current;
+  if (!container || !stage) return;
+
+  const bounds = getContentBounds(stickyNotes, lines, textBoxes);
+
+  // Save container's original styles
+  const prevWidth = container.style.width;
+  const prevHeight = container.style.height;
+  const prevOverflow = container.style.overflow;
+
+  // Reset stage to 1:1 world coords, shifted so content starts at (0,0)
+  setScale(1);
+  setPosition({ x: -bounds.x, y: -bounds.y });
+
+  // Resize container to fit full content bounds
+  container.style.width = `${bounds.width}px`;
+  container.style.height = `${bounds.height}px`;
+  container.style.overflow = "visible";
+  stage.width(bounds.width);
+  stage.height(bounds.height);
+  stage.batchDraw();
+
+  // Wait for React + browser to apply all changes
+  await new Promise((resolve) =>
+    requestAnimationFrame(() => requestAnimationFrame(resolve)),
+  );
 
   try {
-    // We capture the container, but we override the "view" using the style property.
-    // This shifts the "snapshot camera" to cover the full content bounds
-    // regardless of where the user has panned or zoomed.
     const canvas = await toCanvas(container, {
-      width: bounds.width * scale,
-      height: bounds.height * scale,
-      style: {
-        // This math "un-pans" the current view and shifts to our calculated bounds
-        transform: `translate(${-bounds.x * scale}px, ${-bounds.y * scale}px)`,
-        transformOrigin: "top left",
-        width: `${bounds.width}px`,
-        height: `${bounds.height}px`,
-      },
+      width: bounds.width,
+      height: bounds.height,
+      canvasWidth: bounds.width,
+      canvasHeight: bounds.height,
       pixelRatio: 2,
+      skipFonts: false,
     });
 
     const mimeType = format === "jpeg" ? "image/jpeg" : "image/png";
     const dataUrl = canvas.toDataURL(mimeType, 0.95);
-    triggerDownload(dataUrl, `full-canvas-export.${format}`);
+    triggerDownload(dataUrl, `canvas-export.${format}`);
   } catch (err) {
-    console.error("Full export failed:", err);
-  }
-}
-
-export async function exportCanvas(options: ExportOptions): Promise<void> {
-  if (options.format === "svg") {
-    // SVG logic already handles positioning via screenX/Y calculations
-    // (Ensure your SVG function uses the same 'bounds' logic if needed)
-    console.warn("SVG export uses current view; use PNG for full canvas.");
-  } else {
-    await exportRaster(options);
+    console.error("Export failed:", err);
+  } finally {
+    // Restore everything
+    container.style.width = prevWidth;
+    container.style.height = prevHeight;
+    container.style.overflow = prevOverflow;
+    stage.width(options.dimensions.width);
+    stage.height(options.dimensions.height);
+    stage.batchDraw();
+    setScale(scale);
+    setPosition(position);
   }
 }

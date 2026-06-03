@@ -111,27 +111,6 @@ const Canvas = () => {
   }, []);
 
   useEffect(() => {
-    const down = (e: KeyboardEvent) => {
-      if (e.code === "Space" && !e.repeat) {
-        e.preventDefault();
-        isSpacePressedRef.current = true;
-      }
-    };
-    const up = (e: KeyboardEvent) => {
-      if (e.code === "Space") {
-        isSpacePressedRef.current = false;
-        isPanning.current = false;
-      }
-    };
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    return () => {
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
-    };
-  }, []);
-
-  useEffect(() => {
     const tr = transformerRef.current;
     if (!tr) return;
     if (selectedId && !editingId) {
@@ -183,17 +162,25 @@ const Canvas = () => {
       containerRef,
       stageRef,
       stickyNotes,
+      lines,
+      textBoxes,
       scale,
       position,
       dimensions,
+      setScale,
+      setPosition,
     });
   };
-
   const handleStageMouseDown = (e: any) => {
     const stage = stageRef.current;
     const onBackground = e.target === stage;
 
-    if (isSpacePressedRef.current || e.evt.button === 1) {
+    // Middle mouse button panning (keep this)
+    // Middle mouse button OR select tool on background = pan
+    if (
+      e.evt.button === 1 ||
+      (activeToolRef.current === "select" && onBackground)
+    ) {
       isPanning.current = true;
       lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
       return;
@@ -285,6 +272,13 @@ const Canvas = () => {
     isPanning.current = false;
   };
 
+  const handleStageDblClick = (e: any) => {
+    // Start panning on double click on background
+    if (e.target !== stageRef.current) return;
+    isPanning.current = true;
+    lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
+  };
+
   const handleTransformEnd = (e: any, id: string) => {
     const node = e.target;
     const newWidth = Math.max(node.width() * node.scaleX(), MIN_WIDTH);
@@ -338,6 +332,7 @@ const Canvas = () => {
           onMouseDown={handleStageMouseDown}
           onMouseMove={handleStageMouseMove}
           onMouseUp={handleStageMouseUp}
+          onDblClick={handleStageDblClick}
         >
           <Layer>
             {lines.map((line, i) => (
@@ -428,6 +423,7 @@ const Canvas = () => {
         {stickyNotes.map((note) => (
           <div
             key={note.id}
+            data-note-id={note.id}
             className="absolute pointer-events-auto"
             style={{
               left: note.x * scale + position.x,
