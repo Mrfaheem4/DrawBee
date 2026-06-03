@@ -67,6 +67,7 @@ interface StickyNoteProps {
   initialDate?: string;
   initialColor?: NoteColor;
   readOnly?: boolean;
+  onUpdate?: (title: string, content: string) => void; // ← ADD 1: new prop
 }
 
 const StickyNote: React.FC<StickyNoteProps> = ({
@@ -75,6 +76,7 @@ const StickyNote: React.FC<StickyNoteProps> = ({
   initialDate = new Date().toLocaleDateString(),
   initialColor = "yellow",
   readOnly = false,
+  onUpdate, // ← ADD 2: destructure it
 }) => {
   const [title, setTitle] = useState(initialTitle);
   const [content, setContent] = useState(initialContent);
@@ -85,6 +87,11 @@ const StickyNote: React.FC<StickyNoteProps> = ({
   useEffect(() => {
     setRotation(Math.random() * 4 - 2);
   }, []);
+
+  // ← ADD 3: bubble changes up to Canvas whenever title or content changes
+  useEffect(() => {
+    onUpdate?.(title, content);
+  }, [title, content]);
 
   const config = COLOR_MAP[color];
 
@@ -97,7 +104,7 @@ const StickyNote: React.FC<StickyNoteProps> = ({
   return (
     <div style={{ width: "20rem" }}>
       <div
-        className="group relative w-[20rem] min-h-[16rem] p-8 pt-12 flex flex-col rounded-2xl transition-all duration-300 ease-out  hover:-translate-y-2 hover:scale-[1.02]"
+        className="group relative w-[20rem]  p-8 pt-12 flex flex-col rounded-2xl transition-all duration-300 ease-out hover:-translate-y-2 hover:scale-[1.02]"
         style={{
           backgroundColor: config.bg,
           transform: `rotate(${rotation}deg)`,
@@ -150,12 +157,20 @@ const StickyNote: React.FC<StickyNoteProps> = ({
           />
           <textarea
             value={content}
-            onChange={(e) => setContent(e.target.value)}
+            onChange={(e) => {
+              setContent(e.target.value);
+              // Auto-resize
+              e.target.style.height = "auto";
+              e.target.style.height = `${e.target.scrollHeight}px`;
+            }}
             className="w-full flex-grow bg-transparent text-base leading-relaxed text-slate-700 border-none outline-none focus:ring-0 resize-none p-0 placeholder-slate-400/50"
             placeholder="Write your note here..."
             readOnly={readOnly}
+            rows={1}
             style={{
               fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
+              height: "auto",
+              overflow: "hidden",
             }}
           />
         </div>

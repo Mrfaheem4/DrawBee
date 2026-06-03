@@ -10,6 +10,8 @@ import {
 } from "react-konva";
 import { useCanvas } from "../context/CanvasContext";
 import StickyNote, { type NoteColor } from "./StickyNote";
+import Toolbar from "./ToolBar";
+import { exportCanvas } from "../utils/exportCanvas";
 
 interface DrawingLine {
   tool: string;
@@ -45,7 +47,7 @@ const MIN_WIDTH = 150;
 const PADDING = 8;
 
 const Canvas = () => {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<any>(null);
   const transformerRef = useRef<any>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
@@ -175,6 +177,18 @@ const Canvas = () => {
     y: worldY * scaleRef.current + positionRef.current.y,
   });
 
+  const handleExport = async (format: "png" | "jpeg" | "svg") => {
+    await exportCanvas({
+      format,
+      containerRef,
+      stageRef,
+      stickyNotes,
+      scale,
+      position,
+      dimensions,
+    });
+  };
+
   const handleStageMouseDown = (e: any) => {
     const stage = stageRef.current;
     const onBackground = e.target === stage;
@@ -231,7 +245,6 @@ const Canvas = () => {
     if (onBackground) {
       setSelectedId(null);
       setEditingId(null);
-      // Exit editing mode on all sticky notes
       setStickyNotes((prev) => prev.map((n) => ({ ...n, isEditing: false })));
     }
 
@@ -305,206 +318,224 @@ const Canvas = () => {
     : null;
 
   return (
-    <div
-      ref={containerRef}
-      className="w-full h-full bg-white relative overflow-hidden"
-    >
-      <Stage
-        ref={stageRef}
-        width={dimensions.width}
-        height={dimensions.height}
-        scaleX={scale}
-        scaleY={scale}
-        x={position.x}
-        y={position.y}
-        onMouseDown={handleStageMouseDown}
-        onMouseMove={handleStageMouseMove}
-        onMouseUp={handleStageMouseUp}
+    <div className="w-full h-full flex">
+      {/* Toolbar sits outside the export container so it won't appear in exports */}
+      <Toolbar onExport={handleExport} />
+
+      {/* This div is what gets captured by html2canvas */}
+      <div
+        ref={containerRef}
+        className="flex-1 bg-white relative overflow-hidden"
       >
-        <Layer>
-          {lines.map((line, i) => (
-            <Line
-              key={i}
-              points={line.points}
-              stroke={line.tool === "eraser" ? "#ffffff" : line.color}
-              strokeWidth={line.tool === "eraser" ? 30 : line.width}
-              lineCap="round"
-              lineJoin="round"
-              globalCompositeOperation={
-                line.tool === "eraser" ? "destination-out" : "source-over"
+        <Stage
+          ref={stageRef}
+          width={dimensions.width}
+          height={dimensions.height}
+          scaleX={scale}
+          scaleY={scale}
+          x={position.x}
+          y={position.y}
+          onMouseDown={handleStageMouseDown}
+          onMouseMove={handleStageMouseMove}
+          onMouseUp={handleStageMouseUp}
+        >
+          <Layer>
+            {lines.map((line, i) => (
+              <Line
+                key={i}
+                points={line.points}
+                stroke={line.tool === "eraser" ? "#ffffff" : line.color}
+                strokeWidth={line.tool === "eraser" ? 30 : line.width}
+                lineCap="round"
+                lineJoin="round"
+                globalCompositeOperation={
+                  line.tool === "eraser" ? "destination-out" : "source-over"
+                }
+              />
+            ))}
+
+            {textBoxes.map((tb) => {
+              const isEditing = editingId === tb.id;
+              const isSelected = selectedId === tb.id;
+              const lineCount = Math.max(
+                (tb.text || " ").split("\n").length,
+                1,
+              );
+              const boxHeight = lineCount * FONT_SIZE * 1.4 + PADDING * 2;
+              return (
+                <Group
+                  key={tb.id}
+                  id={tb.id}
+                  x={tb.x}
+                  y={tb.y}
+                  rotation={tb.rotation}
+                  draggable={activeTool === "select" && !isEditing}
+                  onClick={() =>
+                    activeTool === "select" && setSelectedId(tb.id)
+                  }
+                  onDblClick={() => {
+                    setEditingId(tb.id);
+                    setSelectedId(null);
+                  }}
+                  onDragEnd={(e) =>
+                    setTextBoxes((prev) =>
+                      prev.map((t) =>
+                        t.id === tb.id
+                          ? { ...t, x: e.target.x(), y: e.target.y() }
+                          : t,
+                      ),
+                    )
+                  }
+                  onTransformEnd={(e) => handleTransformEnd(e, tb.id)}
+                >
+                  <Rect
+                    width={tb.width}
+                    height={boxHeight}
+                    fill="transparent"
+                    stroke={
+                      isSelected && !isEditing ? "#3b82f6" : "transparent"
+                    }
+                    strokeWidth={1}
+                    cornerRadius={3}
+                  />
+                  <Text
+                    text={isEditing ? "" : tb.text || "Type here..."}
+                    x={PADDING}
+                    y={PADDING}
+                    width={tb.width - PADDING * 2}
+                    fontSize={FONT_SIZE}
+                    fontFamily={FONT_FAMILY}
+                    fill={tb.text ? tb.color : "#aaaaaa"}
+                    wrap="word"
+                    lineHeight={1.4}
+                  />
+                </Group>
+              );
+            })}
+
+            <Transformer
+              ref={transformerRef}
+              enabledAnchors={["middle-left", "middle-right"]}
+              rotateEnabled
+              boundBoxFunc={(oldBox, newBox) =>
+                newBox.width < MIN_WIDTH ? oldBox : newBox
               }
             />
-          ))}
+          </Layer>
+        </Stage>
 
-          {textBoxes.map((tb) => {
-            const isEditing = editingId === tb.id;
-            const isSelected = selectedId === tb.id;
-            const lineCount = Math.max((tb.text || " ").split("\n").length, 1);
-            const boxHeight = lineCount * FONT_SIZE * 1.4 + PADDING * 2;
-            return (
-              <Group
-                key={tb.id}
-                id={tb.id}
-                x={tb.x}
-                y={tb.y}
-                rotation={tb.rotation}
-                draggable={activeTool === "select" && !isEditing}
-                onClick={() => activeTool === "select" && setSelectedId(tb.id)}
-                onDblClick={() => {
-                  setEditingId(tb.id);
-                  setSelectedId(null);
-                }}
-                onDragEnd={(e) =>
-                  setTextBoxes((prev) =>
-                    prev.map((t) =>
-                      t.id === tb.id
-                        ? { ...t, x: e.target.x(), y: e.target.y() }
-                        : t,
-                    ),
-                  )
-                }
-                onTransformEnd={(e) => handleTransformEnd(e, tb.id)}
-              >
-                <Rect
-                  width={tb.width}
-                  height={boxHeight}
-                  fill="transparent"
-                  stroke={isSelected && !isEditing ? "#3b82f6" : "transparent"}
-                  strokeWidth={1}
-                  cornerRadius={3}
-                />
-                <Text
-                  text={isEditing ? "" : tb.text || "Type here..."}
-                  x={PADDING}
-                  y={PADDING}
-                  width={tb.width - PADDING * 2}
-                  fontSize={FONT_SIZE}
-                  fontFamily={FONT_FAMILY}
-                  fill={tb.text ? tb.color : "#aaaaaa"}
-                  wrap="word"
-                  lineHeight={1.4}
-                />
-              </Group>
-            );
-          })}
-
-          <Transformer
-            ref={transformerRef}
-            enabledAnchors={["middle-left", "middle-right"]}
-            rotateEnabled
-            boundBoxFunc={(oldBox, newBox) =>
-              newBox.width < MIN_WIDTH ? oldBox : newBox
-            }
-          />
-        </Layer>
-      </Stage>
-
-      {/* DOM Layer — sticky notes */}
-      {stickyNotes.map((note) => (
-        <div
-          key={note.id}
-          className="absolute pointer-events-auto"
-          style={{
-            left: note.x * scale + position.x,
-            top: note.y * scale + position.y,
-            transformOrigin: "top left",
-            transform: `scale(${scale})`,
-            cursor:
-              activeTool === "select" && !note.isEditing ? "move" : "default",
-          }}
-          onDoubleClick={(e) => {
-            if (activeTool !== "select") return;
-            e.stopPropagation();
-            setStickyNotes((prev) =>
-              prev.map((n) => ({
-                ...n,
-                isEditing: n.id === note.id,
-              })),
-            );
-          }}
-          onMouseDown={(e) => {
-            if (activeTool !== "select") return;
-            // Don't initiate drag if the note is in edit mode
-            if (note.isEditing) return;
-            e.stopPropagation();
-
-            // Calculate the world-space offset from note origin to the click point
-            const offsetX =
-              (e.clientX - positionRef.current.x) / scaleRef.current - note.x;
-            const offsetY =
-              (e.clientY - positionRef.current.y) / scaleRef.current - note.y;
-
-            const onMove = (ev: MouseEvent) => {
+        {/* DOM Layer — sticky notes */}
+        {stickyNotes.map((note) => (
+          <div
+            key={note.id}
+            className="absolute pointer-events-auto"
+            style={{
+              left: note.x * scale + position.x,
+              top: note.y * scale + position.y,
+              transformOrigin: "top left",
+              transform: `scale(${scale})`,
+              cursor:
+                activeTool === "select" && !note.isEditing ? "move" : "default",
+            }}
+            onDoubleClick={(e) => {
+              if (activeTool !== "select") return;
+              e.stopPropagation();
               setStickyNotes((prev) =>
-                prev.map((n) =>
-                  n.id === note.id
-                    ? {
-                        ...n,
-                        x:
-                          (ev.clientX - positionRef.current.x) /
-                            scaleRef.current -
-                          offsetX,
-                        y:
-                          (ev.clientY - positionRef.current.y) /
-                            scaleRef.current -
-                          offsetY,
-                      }
-                    : n,
+                prev.map((n) => ({
+                  ...n,
+                  isEditing: n.id === note.id,
+                })),
+              );
+            }}
+            onMouseDown={(e) => {
+              if (activeTool !== "select") return;
+              if (note.isEditing) return;
+              e.stopPropagation();
+
+              const offsetX =
+                (e.clientX - positionRef.current.x) / scaleRef.current - note.x;
+              const offsetY =
+                (e.clientY - positionRef.current.y) / scaleRef.current - note.y;
+
+              const onMove = (ev: MouseEvent) => {
+                setStickyNotes((prev) =>
+                  prev.map((n) =>
+                    n.id === note.id
+                      ? {
+                          ...n,
+                          x:
+                            (ev.clientX - positionRef.current.x) /
+                              scaleRef.current -
+                            offsetX,
+                          y:
+                            (ev.clientY - positionRef.current.y) /
+                              scaleRef.current -
+                            offsetY,
+                        }
+                      : n,
+                  ),
+                );
+              };
+
+              const onUp = () => {
+                window.removeEventListener("mousemove", onMove);
+                window.removeEventListener("mouseup", onUp);
+              };
+
+              window.addEventListener("mousemove", onMove);
+              window.addEventListener("mouseup", onUp);
+            }}
+          >
+            <StickyNote
+              initialTitle={note.title}
+              initialContent={note.content}
+              initialColor={note.color}
+              readOnly={activeTool !== "select" || !note.isEditing}
+              onUpdate={(title, content) =>
+                setStickyNotes((prev) =>
+                  prev.map((n) =>
+                    n.id === note.id ? { ...n, title, content } : n,
+                  ),
+                )
+              }
+            />
+          </div>
+        ))}
+
+        {editingBox && textareaScreen && (
+          <textarea
+            key={editingId}
+            ref={textAreaRef}
+            value={editingBox.text}
+            onChange={(e) => {
+              setTextBoxes((prev) =>
+                prev.map((tb) =>
+                  tb.id === editingId ? { ...tb, text: e.target.value } : tb,
                 ),
               );
-            };
-
-            const onUp = () => {
-              window.removeEventListener("mousemove", onMove);
-              window.removeEventListener("mouseup", onUp);
-            };
-
-            window.addEventListener("mousemove", onMove);
-            window.addEventListener("mouseup", onUp);
-          }}
-        >
-          <StickyNote
-            initialTitle={note.title}
-            initialContent={note.content}
-            initialColor={note.color}
-            readOnly={activeTool !== "select" || !note.isEditing}
+              autoResize();
+            }}
+            onBlur={commitEdit}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") commitEdit();
+            }}
+            className="absolute outline-none border border-dashed border-blue-400 bg-transparent resize-none overflow-hidden p-0 m-0"
+            style={{
+              top: textareaScreen.y + PADDING * scale,
+              left: textareaScreen.x + PADDING * scale,
+              width: (editingBox.width - PADDING * 2) * scale,
+              minHeight: FONT_SIZE * scale * 1.4,
+              fontSize: FONT_SIZE * scale,
+              fontFamily: FONT_FAMILY,
+              lineHeight: 1.4,
+              color: editingBox.color,
+              caretColor: editingBox.color,
+              transform: `rotate(${editingBox.rotation}deg)`,
+              transformOrigin: "top left",
+            }}
           />
-        </div>
-      ))}
-
-      {editingBox && textareaScreen && (
-        <textarea
-          key={editingId}
-          ref={textAreaRef}
-          value={editingBox.text}
-          onChange={(e) => {
-            setTextBoxes((prev) =>
-              prev.map((tb) =>
-                tb.id === editingId ? { ...tb, text: e.target.value } : tb,
-              ),
-            );
-            autoResize();
-          }}
-          onBlur={commitEdit}
-          onKeyDown={(e) => {
-            if (e.key === "Escape") commitEdit();
-          }}
-          className="absolute outline-none border border-dashed border-blue-400 bg-transparent resize-none overflow-hidden p-0 m-0"
-          style={{
-            top: textareaScreen.y + PADDING * scale,
-            left: textareaScreen.x + PADDING * scale,
-            width: (editingBox.width - PADDING * 2) * scale,
-            minHeight: FONT_SIZE * scale * 1.4,
-            fontSize: FONT_SIZE * scale,
-            fontFamily: FONT_FAMILY,
-            lineHeight: 1.4,
-            color: editingBox.color,
-            caretColor: editingBox.color,
-            transform: `rotate(${editingBox.rotation}deg)`,
-            transformOrigin: "top left",
-          }}
-        />
-      )}
+        )}
+      </div>
     </div>
   );
 };

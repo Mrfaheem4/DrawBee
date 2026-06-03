@@ -1,6 +1,7 @@
 import { useCanvas, type Tool } from "../context/CanvasContext";
 import { MousePointer2, Pencil, Type, StickyNote, Eraser } from "lucide-react";
 import ColorPickerPopup from "./ColorPickerPopup";
+import { exportCanvas } from "../utils/exportCanvas";
 
 const tools: { id: Tool; icon: React.ReactNode; label: string }[] = [
   { id: "select", icon: <MousePointer2 size={20} />, label: "Select" },
@@ -10,7 +11,11 @@ const tools: { id: Tool; icon: React.ReactNode; label: string }[] = [
   { id: "eraser", icon: <Eraser size={20} />, label: "Eraser" },
 ];
 
-const Toolbar = () => {
+interface ToolbarProps {
+  onExport: (format: "png" | "jpeg" | "svg") => void;
+}
+
+const Toolbar = ({ onExport }: ToolbarProps) => {
   const { activeTool, setActiveTool } = useCanvas();
 
   return (
@@ -39,6 +44,21 @@ const Toolbar = () => {
 
       {/* Color Picker */}
       <ColorPickerPopup />
+
+      {/* Divider */}
+      <div className="w-8 h-px bg-gray-700 my-2" />
+
+      {/* Export buttons */}
+      {(["png", "jpeg", "svg"] as const).map((fmt) => (
+        <button
+          key={fmt}
+          onClick={() => onExport(fmt)}
+          title={`Export as ${fmt.toUpperCase()}`}
+          className="w-10 h-6 rounded text-[10px] font-bold text-gray-400 hover:bg-gray-700 hover:text-white transition-colors uppercase tracking-wide"
+        >
+          {fmt}
+        </button>
+      ))}
     </div>
   );
 };
