@@ -9,6 +9,7 @@ import {
   Group,
 } from "react-konva";
 import { useCanvas } from "../context/CanvasContext";
+import StickyNote, { type NoteColor } from "./StickyNote";
 
 interface DrawingLine {
   tool: string;
@@ -27,6 +28,17 @@ interface TextBox {
   rotation: number;
 }
 
+interface StickyNoteItem {
+  id: string;
+  x: number;
+  y: number;
+  title: string;
+  content: string;
+  color: NoteColor;
+  rotation: number;
+  isEditing: boolean;
+}
+
 const FONT_SIZE = 18;
 const FONT_FAMILY = "sans-serif";
 const MIN_WIDTH = 150;
@@ -43,7 +55,6 @@ const Canvas = () => {
   const lastPosRef = useRef({ x: 0, y: 0 });
   const isSpacePressedRef = useRef(false);
 
-  // Keep latest values in refs to avoid stale closures in handlers
   const scaleRef = useRef(1);
   const positionRef = useRef({ x: 0, y: 0 });
   const strokeColorRef = useRef("#000000");
@@ -54,35 +65,37 @@ const Canvas = () => {
 
   const [lines, setLines] = useState<DrawingLine[]>([]);
   const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
+  const [stickyNotes, setStickyNotes] = useState<StickyNoteItem[]>([]);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
 
-  // Sync refs with latest state/props
   useEffect(() => {
     scaleRef.current = scale;
   }, [scale]);
+
   useEffect(() => {
     positionRef.current = position;
   }, [position]);
+
   useEffect(() => {
     strokeColorRef.current = strokeColor;
   }, [strokeColor]);
+
   useEffect(() => {
     strokeWidthRef.current = strokeWidth;
   }, [strokeWidth]);
+
   useEffect(() => {
     activeToolRef.current = activeTool;
   }, [activeTool]);
 
-  // Sync fabricRef
   useEffect(() => {
     if (fabricRef && stageRef.current) fabricRef.current = stageRef.current;
   }, [fabricRef]);
 
-  // Container resize
   useEffect(() => {
     if (!containerRef.current) return;
     const ro = new ResizeObserver(() => {
@@ -95,7 +108,6 @@ const Canvas = () => {
     return () => ro.disconnect();
   }, []);
 
-  // Spacebar
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
       if (e.code === "Space" && !e.repeat) {
@@ -117,7 +129,6 @@ const Canvas = () => {
     };
   }, []);
 
-  // Transformer sync
   useEffect(() => {
     const tr = transformerRef.current;
     if (!tr) return;
@@ -133,7 +144,6 @@ const Canvas = () => {
     }
   }, [selectedId, editingId, textBoxes]);
 
-  // Focus textarea when editing starts
   useEffect(() => {
     if (editingId && textAreaRef.current) {
       setTimeout(() => {
@@ -150,32 +160,25 @@ const Canvas = () => {
     ta.style.height = `${ta.scrollHeight}px`;
   };
 
-  // Convert screen coords → world coords
   const toWorld = (clientX: number, clientY: number) => {
     const stage = stageRef.current;
     if (!stage) return { x: 0, y: 0 };
     const rect = stage.container().getBoundingClientRect();
-    const sx = clientX - rect.left;
-    const sy = clientY - rect.top;
     return {
-      x: (sx - positionRef.current.x) / scaleRef.current,
-      y: (sy - positionRef.current.y) / scaleRef.current,
+      x: (clientX - rect.left - positionRef.current.x) / scaleRef.current,
+      y: (clientY - rect.top - positionRef.current.y) / scaleRef.current,
     };
   };
 
-  // Convert world coords → screen coords (relative to container)
-  const toScreen = (worldX: number, worldY: number) => {
-    return {
-      x: worldX * scaleRef.current + positionRef.current.x,
-      y: worldY * scaleRef.current + positionRef.current.y,
-    };
-  };
+  const toScreen = (worldX: number, worldY: number) => ({
+    x: worldX * scaleRef.current + positionRef.current.x,
+    y: worldY * scaleRef.current + positionRef.current.y,
+  });
 
   const handleStageMouseDown = (e: any) => {
     const stage = stageRef.current;
     const onBackground = e.target === stage;
 
-    // Pan
     if (isSpacePressedRef.current || e.evt.button === 1) {
       isPanning.current = true;
       lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
@@ -184,7 +187,25 @@ const Canvas = () => {
 
     const tool = activeToolRef.current;
 
-    // Text tool — place new textbox
+    if (tool === "sticky" && onBackground) {
+      const world = toWorld(e.evt.clientX, e.evt.clientY);
+      const id = `sticky_${Date.now()}`;
+      setStickyNotes((prev) => [
+        ...prev,
+        {
+          id,
+          x: world.x,
+          y: world.y,
+          title: "Quick Note",
+          content: "",
+          color: "yellow",
+          rotation: 0,
+          isEditing: false,
+        },
+      ]);
+      return;
+    }
+
     if (tool === "text" && onBackground) {
       const world = toWorld(e.evt.clientX, e.evt.clientY);
       const id = `tb_${Date.now()}`;
@@ -200,7 +221,6 @@ const Canvas = () => {
           rotation: 0,
         },
       ]);
-      // Use timeout so state settles before setting editingId
       setTimeout(() => {
         setEditingId(id);
         setSelectedId(null);
@@ -208,14 +228,14 @@ const Canvas = () => {
       return;
     }
 
-    // Deselect on background click
     if (onBackground) {
       setSelectedId(null);
       setEditingId(null);
+      // Exit editing mode on all sticky notes
+      setStickyNotes((prev) => prev.map((n) => ({ ...n, isEditing: false })));
     }
 
-    // Draw
-    if (tool !== "select" && tool !== "text") {
+    if (tool !== "select" && tool !== "text" && tool !== "sticky") {
       const world = toWorld(e.evt.clientX, e.evt.clientY);
       isDrawing.current = true;
       setLines((prev) => [
@@ -272,14 +292,6 @@ const Canvas = () => {
     );
   };
 
-  const handleDragEnd = (e: any, id: string) => {
-    setTextBoxes((prev) =>
-      prev.map((tb) =>
-        tb.id === id ? { ...tb, x: e.target.x(), y: e.target.y() } : tb,
-      ),
-    );
-  };
-
   const commitEdit = () => {
     setTextBoxes((prev) =>
       prev.filter((tb) => tb.id !== editingId || tb.text.trim() !== ""),
@@ -288,8 +300,6 @@ const Canvas = () => {
   };
 
   const editingBox = textBoxes.find((tb) => tb.id === editingId) ?? null;
-
-  // Screen position of the textarea
   const textareaScreen = editingBox
     ? toScreen(editingBox.x, editingBox.y)
     : null;
@@ -331,7 +341,6 @@ const Canvas = () => {
             const isSelected = selectedId === tb.id;
             const lineCount = Math.max((tb.text || " ").split("\n").length, 1);
             const boxHeight = lineCount * FONT_SIZE * 1.4 + PADDING * 2;
-
             return (
               <Group
                 key={tb.id}
@@ -345,16 +354,23 @@ const Canvas = () => {
                   setEditingId(tb.id);
                   setSelectedId(null);
                 }}
-                onDragEnd={(e) => handleDragEnd(e, tb.id)}
+                onDragEnd={(e) =>
+                  setTextBoxes((prev) =>
+                    prev.map((t) =>
+                      t.id === tb.id
+                        ? { ...t, x: e.target.x(), y: e.target.y() }
+                        : t,
+                    ),
+                  )
+                }
                 onTransformEnd={(e) => handleTransformEnd(e, tb.id)}
               >
                 <Rect
                   width={tb.width}
                   height={boxHeight}
-                  fill={isEditing ? "rgba(255,255,255,0.01)" : "transparent"}
+                  fill="transparent"
                   stroke={isSelected && !isEditing ? "#3b82f6" : "transparent"}
                   strokeWidth={1}
-                  dash={isEditing ? [4, 3] : undefined}
                   cornerRadius={3}
                 />
                 <Text
@@ -383,7 +399,79 @@ const Canvas = () => {
         </Layer>
       </Stage>
 
-      {/* Floating textarea — shown while editing */}
+      {/* DOM Layer — sticky notes */}
+      {stickyNotes.map((note) => (
+        <div
+          key={note.id}
+          className="absolute pointer-events-auto"
+          style={{
+            left: note.x * scale + position.x,
+            top: note.y * scale + position.y,
+            transformOrigin: "top left",
+            transform: `scale(${scale})`,
+            cursor:
+              activeTool === "select" && !note.isEditing ? "move" : "default",
+          }}
+          onDoubleClick={(e) => {
+            if (activeTool !== "select") return;
+            e.stopPropagation();
+            setStickyNotes((prev) =>
+              prev.map((n) => ({
+                ...n,
+                isEditing: n.id === note.id,
+              })),
+            );
+          }}
+          onMouseDown={(e) => {
+            if (activeTool !== "select") return;
+            // Don't initiate drag if the note is in edit mode
+            if (note.isEditing) return;
+            e.stopPropagation();
+
+            // Calculate the world-space offset from note origin to the click point
+            const offsetX =
+              (e.clientX - positionRef.current.x) / scaleRef.current - note.x;
+            const offsetY =
+              (e.clientY - positionRef.current.y) / scaleRef.current - note.y;
+
+            const onMove = (ev: MouseEvent) => {
+              setStickyNotes((prev) =>
+                prev.map((n) =>
+                  n.id === note.id
+                    ? {
+                        ...n,
+                        x:
+                          (ev.clientX - positionRef.current.x) /
+                            scaleRef.current -
+                          offsetX,
+                        y:
+                          (ev.clientY - positionRef.current.y) /
+                            scaleRef.current -
+                          offsetY,
+                      }
+                    : n,
+                ),
+              );
+            };
+
+            const onUp = () => {
+              window.removeEventListener("mousemove", onMove);
+              window.removeEventListener("mouseup", onUp);
+            };
+
+            window.addEventListener("mousemove", onMove);
+            window.addEventListener("mouseup", onUp);
+          }}
+        >
+          <StickyNote
+            initialTitle={note.title}
+            initialContent={note.content}
+            initialColor={note.color}
+            readOnly={activeTool !== "select" || !note.isEditing}
+          />
+        </div>
+      ))}
+
       {editingBox && textareaScreen && (
         <textarea
           key={editingId}

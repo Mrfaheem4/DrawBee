@@ -1,6 +1,12 @@
 import React, { useState, useEffect } from "react";
 
-type NoteColor = "yellow" | "blue" | "green" | "pink" | "orange" | "purple";
+export type NoteColor =
+  | "yellow"
+  | "blue"
+  | "green"
+  | "pink"
+  | "orange"
+  | "purple";
 
 interface ColorConfig {
   bg: string;
@@ -12,44 +18,44 @@ interface ColorConfig {
 
 const COLOR_MAP: Record<NoteColor, ColorConfig> = {
   yellow: {
-    bg: "#fef08a", // tailwind yellow-200
-    dark: "#eab308", // tailwind yellow-500
-    pin: "#dc2626", // red pin
+    bg: "#fef08a",
+    dark: "#eab308",
+    pin: "#dc2626",
     pinCap: "#ef4444",
     pinShine: "#fca5a5",
   },
   blue: {
-    bg: "#bfdbfe", // tailwind blue-200
-    dark: "#3b82f6", // tailwind blue-500
-    pin: "#1e40af", // dark blue pin
+    bg: "#bfdbfe",
+    dark: "#3b82f6",
+    pin: "#1e40af",
     pinCap: "#3b82f6",
     pinShine: "#93c5fd",
   },
   green: {
-    bg: "#bbf7d0", // tailwind green-200
-    dark: "#22c55e", // tailwind green-500
-    pin: "#15803d", // dark green pin
+    bg: "#bbf7d0",
+    dark: "#22c55e",
+    pin: "#15803d",
     pinCap: "#22c55e",
     pinShine: "#86efac",
   },
   pink: {
-    bg: "#fbcfe8", // tailwind pink-200
-    dark: "#ec4899", // tailwind pink-500
-    pin: "#9d174d", // dark pink pin
+    bg: "#fbcfe8",
+    dark: "#ec4899",
+    pin: "#9d174d",
     pinCap: "#db2777",
     pinShine: "#f9a8d4",
   },
   orange: {
-    bg: "#fed7aa", // tailwind orange-200
-    dark: "#f97316", // tailwind orange-500
-    pin: "#c2410c", // dark orange pin
+    bg: "#fed7aa",
+    dark: "#f97316",
+    pin: "#c2410c",
     pinCap: "#f97316",
     pinShine: "#fdba74",
   },
   purple: {
-    bg: "#e9d5ff", // tailwind purple-200
-    dark: "#a855f7", // tailwind purple-500
-    pin: "#7e22ce", // dark purple pin
+    bg: "#e9d5ff",
+    dark: "#a855f7",
+    pin: "#7e22ce",
     pinCap: "#a855f7",
     pinShine: "#d8b4fe",
   },
@@ -60,13 +66,15 @@ interface StickyNoteProps {
   initialContent?: string;
   initialDate?: string;
   initialColor?: NoteColor;
+  readOnly?: boolean;
 }
 
 const StickyNote: React.FC<StickyNoteProps> = ({
   initialTitle = "Quick Note",
-  initialContent = "Click here to start typing your thoughts...",
+  initialContent = "",
   initialDate = new Date().toLocaleDateString(),
   initialColor = "yellow",
+  readOnly = false,
 }) => {
   const [title, setTitle] = useState(initialTitle);
   const [content, setContent] = useState(initialContent);
@@ -74,46 +82,37 @@ const StickyNote: React.FC<StickyNoteProps> = ({
   const [color, setColor] = useState<NoteColor>(initialColor);
   const [rotation, setRotation] = useState(0);
 
-  // Add a slight random rotation for a "dynamic" look on mount
   useEffect(() => {
-    const randomRot = Math.random() * 4 - 2;
-    setRotation(randomRot);
+    setRotation(Math.random() * 4 - 2);
   }, []);
 
   const config = COLOR_MAP[color];
 
-  // Function to cycle through colors
   const cycleColor = () => {
     const colors = Object.keys(COLOR_MAP) as NoteColor[];
     const currentIndex = colors.indexOf(color);
-    const nextIndex = (currentIndex + 1) % colors.length;
-    setColor(colors[nextIndex]);
+    setColor(colors[(currentIndex + 1) % colors.length]);
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen p-12">
+    <div style={{ width: "20rem" }}>
       <div
-        className="group relative w-[28rem] min-h-[32rem] p-8 pt-12 flex flex-col rounded-2xl transition-all duration-300 ease-out cursor-default"
+        className="group relative w-[20rem] min-h-[16rem] p-8 pt-12 flex flex-col rounded-2xl transition-all duration-300 ease-out  hover:-translate-y-2 hover:scale-[1.02]"
         style={{
           backgroundColor: config.bg,
           transform: `rotate(${rotation}deg)`,
           boxShadow: "10px 10px 25px rgba(0, 0, 0, 0.1)",
-          // On hover, we'll lift it slightly and straighten it
+          cursor: readOnly ? "move" : "default",
         }}
       >
-        {/* Interactive Push Pin */}
+        {/* Pin — always has pointer events */}
         <div
           className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-6 z-30 drop-shadow-lg cursor-pointer transition-transform hover:scale-110 active:scale-95"
           onClick={cycleColor}
           title="Click to change color"
+          style={{ pointerEvents: "auto" }}
         >
-          <svg
-            width="40"
-            height="40"
-            viewBox="0 0 24 24"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
             <line
               x1="12"
               y1="16"
@@ -136,42 +135,49 @@ const StickyNote: React.FC<StickyNoteProps> = ({
           </svg>
         </div>
 
-        {/* Main Content Area */}
-        <div className="z-10 flex flex-col flex-grow gap-4">
+        {/* Content — pointer events blocked when readOnly */}
+        <div
+          className="z-10 flex flex-col flex-grow gap-4"
+          style={{ pointerEvents: readOnly ? "none" : "auto" }}
+        >
           <input
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            className="w-full bg-transparent text-3xl font-bold text-slate-800 tracking-tight border-none outline-none focus:ring-0 p-0 placeholder-slate-400/50"
+            className="w-full bg-transparent text-2xl font-bold text-slate-800 tracking-tight border-none outline-none focus:ring-0 p-0 placeholder-slate-400/50"
             placeholder="Title"
+            readOnly={readOnly}
           />
-
           <textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
-            className="w-full flex-grow bg-transparent text-xl leading-relaxed text-slate-700 border-none outline-none focus:ring-0 resize-none p-0 placeholder-slate-400/50"
+            className="w-full flex-grow bg-transparent text-base leading-relaxed text-slate-700 border-none outline-none focus:ring-0 resize-none p-0 placeholder-slate-400/50"
             placeholder="Write your note here..."
+            readOnly={readOnly}
             style={{
               fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
             }}
           />
         </div>
 
-        {/* Footer Info */}
-        <div className="z-10 mt-6 pt-4 border-t border-black/5 flex justify-between items-center">
+        {/* Footer — pointer events blocked when readOnly */}
+        <div
+          className="z-10 mt-4 pt-3 border-t border-black/5 flex justify-between items-center"
+          style={{ pointerEvents: readOnly ? "none" : "auto" }}
+        >
           <input
             type="text"
             value={date}
             onChange={(e) => setDate(e.target.value)}
-            className="bg-transparent text-sm font-bold uppercase tracking-widest text-slate-500 border-none outline-none focus:ring-0 p-0 w-1/2"
+            className="bg-transparent text-xs font-bold uppercase tracking-widest text-slate-500 border-none outline-none focus:ring-0 p-0 w-1/2"
+            readOnly={readOnly}
           />
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity">
             Tap pin to change color
           </span>
         </div>
 
-        {/* Realistic Paper Curl Effect */}
-        {/* Shadow under the curl */}
+        {/* Paper curl shadow */}
         <div
           className="absolute bottom-0 right-0 w-20 h-20 z-0 pointer-events-none transition-all duration-300 group-hover:w-24 group-hover:h-24"
           style={{
@@ -180,8 +186,7 @@ const StickyNote: React.FC<StickyNoteProps> = ({
             filter: "blur(4px)",
           }}
         />
-
-        {/* The curled flap */}
+        {/* Curl flap */}
         <div
           className="absolute bottom-0 right-0 w-0 h-0 border-solid pointer-events-none z-20 transition-all duration-300 group-hover:border-[0_0_4.5rem_4.5rem]"
           style={{
@@ -190,23 +195,12 @@ const StickyNote: React.FC<StickyNoteProps> = ({
             boxShadow: "-4px -4px 8px rgba(0,0,0,0.1)",
           }}
         />
-
-        {/* Knockout for the sharp corner */}
+        {/* Curl knockout */}
         <div
           className="absolute bottom-0 right-0 w-16 h-16 bg-slate-50 pointer-events-none z-10 transition-all duration-300 group-hover:w-20 group-hover:h-20"
-          style={{
-            clipPath: "polygon(100% 0, 0 100%, 100% 100%)",
-          }}
+          style={{ clipPath: "polygon(100% 0, 0 100%, 100% 100%)" }}
         />
       </div>
-
-      {/* Style for hover effects */}
-      <style>{`
-        .group:hover {
-          transform: rotate(0deg) translateY(-8px) scale(1.02) !important;
-          box-shadow: 20px 20px 40px rgba(0, 0, 0, 0.12) !important;
-        }
-      `}</style>
     </div>
   );
 };
