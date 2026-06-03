@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { Stage, Layer, Line, Text, Transformer } from "react-konva";
+import {
+  Stage,
+  Layer,
+  Line,
+  Text,
+  Transformer,
+  Rect,
+  Group,
+} from "react-konva";
 import { useCanvas } from "../context/CanvasContext";
 
 interface DrawingLine {
@@ -9,158 +17,282 @@ interface DrawingLine {
   width: number;
 }
 
-interface TextElement {
+interface TextBox {
   id: string;
   text: string;
   x: number;
   y: number;
+  width: number;
   color: string;
-  rotation?: number;
+  rotation: number;
 }
+
+const FONT_SIZE = 18;
+const FONT_FAMILY = "sans-serif";
+const MIN_WIDTH = 150;
+const PADDING = 8;
 
 const Canvas = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<any>(null);
   const transformerRef = useRef<any>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
+
   const isDrawing = useRef(false);
   const isPanning = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
   const isSpacePressedRef = useRef(false);
 
+  // Keep latest values in refs to avoid stale closures in handlers
+  const scaleRef = useRef(1);
+  const positionRef = useRef({ x: 0, y: 0 });
+  const strokeColorRef = useRef("#000000");
+  const strokeWidthRef = useRef(3);
+  const activeToolRef = useRef("pen");
+
   const { fabricRef, activeTool, strokeColor, strokeWidth } = useCanvas();
 
   const [lines, setLines] = useState<DrawingLine[]>([]);
-  const [texts, setTexts] = useState<TextElement[]>([]);
+  const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
 
-  const PLACEHOLDER_TEXT = "Type here...";
-
-  // Auto-resize textarea when text changes
+  // Sync refs with latest state/props
   useEffect(() => {
-    if (editingId && textAreaRef.current) {
-      textAreaRef.current.style.width = "auto";
-      textAreaRef.current.style.width = `${textAreaRef.current.scrollWidth}px`;
-    }
-  }, [texts, editingId]);
+    scaleRef.current = scale;
+  }, [scale]);
+  useEffect(() => {
+    positionRef.current = position;
+  }, [position]);
+  useEffect(() => {
+    strokeColorRef.current = strokeColor;
+  }, [strokeColor]);
+  useEffect(() => {
+    strokeWidthRef.current = strokeWidth;
+  }, [strokeWidth]);
+  useEffect(() => {
+    activeToolRef.current = activeTool;
+  }, [activeTool]);
 
+  // Sync fabricRef
   useEffect(() => {
     if (fabricRef && stageRef.current) fabricRef.current = stageRef.current;
   }, [fabricRef]);
 
-  useEffect(() => {
-    if (transformerRef.current) {
-      if (selectedId) {
-        const node = stageRef.current.findOne("#" + selectedId);
-        if (node) {
-          transformerRef.current.nodes([node]);
-          transformerRef.current.getLayer().batchDraw();
-        }
-      } else {
-        transformerRef.current.nodes([]);
-        transformerRef.current.getLayer().batchDraw();
-      }
-    }
-  }, [selectedId, texts]);
-
+  // Container resize
   useEffect(() => {
     if (!containerRef.current) return;
-    const handleResize = () => {
+    const ro = new ResizeObserver(() => {
       const rect = containerRef.current!.getBoundingClientRect();
       setDimensions({ width: rect.width, height: rect.height });
-    };
-    handleResize();
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
+    });
+    ro.observe(containerRef.current);
+    const rect = containerRef.current.getBoundingClientRect();
+    setDimensions({ width: rect.width, height: rect.height });
+    return () => ro.disconnect();
   }, []);
 
-  const handleMouseDown = (e: any) => {
-    const clickedOnEmpty = e.target === e.target.getStage();
-    if (clickedOnEmpty) {
-      setSelectedId(null);
-      setEditingId(null);
-    }
-
-    const stage = e.target.getStage();
-    const clientPointer = stage.getPointerPosition();
-    const transformPointer = {
-      x: (clientPointer.x - position.x) / scale,
-      y: (clientPointer.y - position.y) / scale,
+  // Spacebar
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.code === "Space" && !e.repeat) {
+        e.preventDefault();
+        isSpacePressedRef.current = true;
+      }
     };
+    const up = (e: KeyboardEvent) => {
+      if (e.code === "Space") {
+        isSpacePressedRef.current = false;
+        isPanning.current = false;
+      }
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
+  }, []);
 
+  // Transformer sync
+  useEffect(() => {
+    const tr = transformerRef.current;
+    if (!tr) return;
+    if (selectedId && !editingId) {
+      const node = stageRef.current?.findOne(`#${selectedId}`);
+      if (node) {
+        tr.nodes([node]);
+        tr.getLayer()?.batchDraw();
+      }
+    } else {
+      tr.nodes([]);
+      tr.getLayer()?.batchDraw();
+    }
+  }, [selectedId, editingId, textBoxes]);
+
+  // Focus textarea when editing starts
+  useEffect(() => {
+    if (editingId && textAreaRef.current) {
+      setTimeout(() => {
+        textAreaRef.current?.focus();
+        autoResize();
+      }, 0);
+    }
+  }, [editingId]);
+
+  const autoResize = () => {
+    const ta = textAreaRef.current;
+    if (!ta) return;
+    ta.style.height = "auto";
+    ta.style.height = `${ta.scrollHeight}px`;
+  };
+
+  // Convert screen coords → world coords
+  const toWorld = (clientX: number, clientY: number) => {
+    const stage = stageRef.current;
+    if (!stage) return { x: 0, y: 0 };
+    const rect = stage.container().getBoundingClientRect();
+    const sx = clientX - rect.left;
+    const sy = clientY - rect.top;
+    return {
+      x: (sx - positionRef.current.x) / scaleRef.current,
+      y: (sy - positionRef.current.y) / scaleRef.current,
+    };
+  };
+
+  // Convert world coords → screen coords (relative to container)
+  const toScreen = (worldX: number, worldY: number) => {
+    return {
+      x: worldX * scaleRef.current + positionRef.current.x,
+      y: worldY * scaleRef.current + positionRef.current.y,
+    };
+  };
+
+  const handleStageMouseDown = (e: any) => {
+    const stage = stageRef.current;
+    const onBackground = e.target === stage;
+
+    // Pan
     if (isSpacePressedRef.current || e.evt.button === 1) {
       isPanning.current = true;
       lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
       return;
     }
 
-    if (activeTool === "text" && e.target === stage) {
-      const id = Math.random().toString(36).substring(2, 9);
-      setTexts([
-        ...texts,
+    const tool = activeToolRef.current;
+
+    // Text tool — place new textbox
+    if (tool === "text" && onBackground) {
+      const world = toWorld(e.evt.clientX, e.evt.clientY);
+      const id = `tb_${Date.now()}`;
+      setTextBoxes((prev) => [
+        ...prev,
         {
           id,
           text: "",
-          x: transformPointer.x,
-          y: transformPointer.y,
-          color: strokeColor,
+          x: world.x,
+          y: world.y,
+          width: MIN_WIDTH,
+          color: strokeColorRef.current,
           rotation: 0,
         },
       ]);
-      setSelectedId(id);
-      setEditingId(id);
+      // Use timeout so state settles before setting editingId
+      setTimeout(() => {
+        setEditingId(id);
+        setSelectedId(null);
+      }, 0);
       return;
     }
 
-    if (activeTool === "select" && e.target.className === "Text") {
-      setSelectedId(e.target.id());
-      return;
+    // Deselect on background click
+    if (onBackground) {
+      setSelectedId(null);
+      setEditingId(null);
     }
 
-    isDrawing.current = true;
-    setLines([
-      ...lines,
-      {
-        tool: activeTool,
-        points: [transformPointer.x, transformPointer.y],
-        color: strokeColor,
-        width: strokeWidth,
-      },
-    ]);
+    // Draw
+    if (tool !== "select" && tool !== "text") {
+      const world = toWorld(e.evt.clientX, e.evt.clientY);
+      isDrawing.current = true;
+      setLines((prev) => [
+        ...prev,
+        {
+          tool,
+          points: [world.x, world.y],
+          color: strokeColorRef.current,
+          width: strokeWidthRef.current,
+        },
+      ]);
+    }
   };
 
-  const handleMouseMove = (e: any) => {
+  const handleStageMouseMove = (e: any) => {
     if (isPanning.current) {
       const dx = e.evt.clientX - lastPosRef.current.x;
       const dy = e.evt.clientY - lastPosRef.current.y;
-      setPosition({ x: position.x + dx, y: position.y + dy });
+      setPosition((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
       lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
       return;
     }
     if (!isDrawing.current) return;
-    const stage = e.target.getStage();
-    const clientPointer = stage.getPointerPosition();
-    const transformPointer = {
-      x: (clientPointer.x - position.x) / scale,
-      y: (clientPointer.y - position.y) / scale,
-    };
-    const lastLine = { ...lines[lines.length - 1] };
-    lastLine.points = lastLine.points.concat([
-      transformPointer.x,
-      transformPointer.y,
-    ]);
-    setLines(lines.slice(0, -1).concat(lastLine));
+    const world = toWorld(e.evt.clientX, e.evt.clientY);
+    setLines((prev) => {
+      const last = { ...prev[prev.length - 1] };
+      last.points = [...last.points, world.x, world.y];
+      return [...prev.slice(0, -1), last];
+    });
   };
 
-  const handleMouseUp = () => {
+  const handleStageMouseUp = () => {
     isDrawing.current = false;
     isPanning.current = false;
   };
+
+  const handleTransformEnd = (e: any, id: string) => {
+    const node = e.target;
+    const newWidth = Math.max(node.width() * node.scaleX(), MIN_WIDTH);
+    node.scaleX(1);
+    node.scaleY(1);
+    setTextBoxes((prev) =>
+      prev.map((tb) =>
+        tb.id === id
+          ? {
+              ...tb,
+              x: node.x(),
+              y: node.y(),
+              width: newWidth,
+              rotation: node.rotation(),
+            }
+          : tb,
+      ),
+    );
+  };
+
+  const handleDragEnd = (e: any, id: string) => {
+    setTextBoxes((prev) =>
+      prev.map((tb) =>
+        tb.id === id ? { ...tb, x: e.target.x(), y: e.target.y() } : tb,
+      ),
+    );
+  };
+
+  const commitEdit = () => {
+    setTextBoxes((prev) =>
+      prev.filter((tb) => tb.id !== editingId || tb.text.trim() !== ""),
+    );
+    setEditingId(null);
+  };
+
+  const editingBox = textBoxes.find((tb) => tb.id === editingId) ?? null;
+
+  // Screen position of the textarea
+  const textareaScreen = editingBox
+    ? toScreen(editingBox.x, editingBox.y)
+    : null;
 
   return (
     <div
@@ -168,16 +300,16 @@ const Canvas = () => {
       className="w-full h-full bg-white relative overflow-hidden"
     >
       <Stage
+        ref={stageRef}
         width={dimensions.width}
         height={dimensions.height}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
         scaleX={scale}
         scaleY={scale}
         x={position.x}
         y={position.y}
-        ref={stageRef}
+        onMouseDown={handleStageMouseDown}
+        onMouseMove={handleStageMouseMove}
+        onMouseUp={handleStageMouseUp}
       >
         <Layer>
           {lines.map((line, i) => (
@@ -187,75 +319,104 @@ const Canvas = () => {
               stroke={line.tool === "eraser" ? "#ffffff" : line.color}
               strokeWidth={line.tool === "eraser" ? 30 : line.width}
               lineCap="round"
+              lineJoin="round"
               globalCompositeOperation={
                 line.tool === "eraser" ? "destination-out" : "source-over"
               }
             />
           ))}
-          {texts.map((t) => (
-            <Text
-              key={t.id}
-              id={t.id}
-              text={t.text || PLACEHOLDER_TEXT}
-              x={t.x}
-              y={t.y}
-              fontSize={22}
-              fill={t.text ? t.color : "#cccccc"}
-              visible={editingId !== t.id}
-              draggable={activeTool === "select"}
-              onDblClick={() => setEditingId(t.id)}
-              onClick={() => setSelectedId(t.id)}
-              onDragEnd={(e) =>
-                setTexts(
-                  texts.map((txt) =>
-                    txt.id === t.id
-                      ? { ...txt, x: e.target.x(), y: e.target.y() }
-                      : txt,
-                  ),
-                )
-              }
-            />
-          ))}
-          {selectedId && <Transformer ref={transformerRef} />}
+
+          {textBoxes.map((tb) => {
+            const isEditing = editingId === tb.id;
+            const isSelected = selectedId === tb.id;
+            const lineCount = Math.max((tb.text || " ").split("\n").length, 1);
+            const boxHeight = lineCount * FONT_SIZE * 1.4 + PADDING * 2;
+
+            return (
+              <Group
+                key={tb.id}
+                id={tb.id}
+                x={tb.x}
+                y={tb.y}
+                rotation={tb.rotation}
+                draggable={activeTool === "select" && !isEditing}
+                onClick={() => activeTool === "select" && setSelectedId(tb.id)}
+                onDblClick={() => {
+                  setEditingId(tb.id);
+                  setSelectedId(null);
+                }}
+                onDragEnd={(e) => handleDragEnd(e, tb.id)}
+                onTransformEnd={(e) => handleTransformEnd(e, tb.id)}
+              >
+                <Rect
+                  width={tb.width}
+                  height={boxHeight}
+                  fill={isEditing ? "rgba(255,255,255,0.01)" : "transparent"}
+                  stroke={isSelected && !isEditing ? "#3b82f6" : "transparent"}
+                  strokeWidth={1}
+                  dash={isEditing ? [4, 3] : undefined}
+                  cornerRadius={3}
+                />
+                <Text
+                  text={isEditing ? "" : tb.text || "Type here..."}
+                  x={PADDING}
+                  y={PADDING}
+                  width={tb.width - PADDING * 2}
+                  fontSize={FONT_SIZE}
+                  fontFamily={FONT_FAMILY}
+                  fill={tb.text ? tb.color : "#aaaaaa"}
+                  wrap="word"
+                  lineHeight={1.4}
+                />
+              </Group>
+            );
+          })}
+
+          <Transformer
+            ref={transformerRef}
+            enabledAnchors={["middle-left", "middle-right"]}
+            rotateEnabled
+            boundBoxFunc={(oldBox, newBox) =>
+              newBox.width < MIN_WIDTH ? oldBox : newBox
+            }
+          />
         </Layer>
       </Stage>
 
-      {editingId &&
-        (() => {
-          const t = texts.find((txt) => txt.id === editingId)!;
-          return (
-            <textarea
-              ref={textAreaRef}
-              autoFocus
-              value={t.text}
-              onChange={(e) =>
-                setTexts(
-                  texts.map((txt) =>
-                    txt.id === editingId
-                      ? { ...txt, text: e.target.value }
-                      : txt,
-                  ),
-                )
-              }
-              onBlur={() => setEditingId(null)}
-              style={{
-                position: "absolute",
-                top: position.y + t.y * scale,
-                left: position.x + t.x * scale,
-                fontSize: `${22 * scale}px`,
-                color: t.color,
-                background: "none",
-                border: "none",
-                outline: "none",
-                padding: 0,
-                margin: 0,
-                overflow: "hidden",
-                whiteSpace: "nowrap",
-                fontFamily: "sans-serif",
-              }}
-            />
-          );
-        })()}
+      {/* Floating textarea — shown while editing */}
+      {editingBox && textareaScreen && (
+        <textarea
+          key={editingId}
+          ref={textAreaRef}
+          value={editingBox.text}
+          onChange={(e) => {
+            setTextBoxes((prev) =>
+              prev.map((tb) =>
+                tb.id === editingId ? { ...tb, text: e.target.value } : tb,
+              ),
+            );
+            autoResize();
+          }}
+          onBlur={commitEdit}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") commitEdit();
+          }}
+          className="absolute outline-none border border-dashed border-blue-400 bg-transparent resize-none overflow-hidden p-0 m-0"
+          style={{
+            top: textareaScreen.y + PADDING * scale,
+            left: textareaScreen.x + PADDING * scale,
+            width: (editingBox.width - PADDING * 2) * scale,
+            minHeight: FONT_SIZE * scale * 1.4,
+            fontSize: FONT_SIZE * scale,
+            fontFamily: FONT_FAMILY,
+            lineHeight: 1.4,
+            color: editingBox.color,
+            caretColor: editingBox.color,
+            transform: `rotate(${editingBox.rotation}deg)`,
+            transformOrigin: "top left",
+          }}
+        />
+      )}
     </div>
   );
 };
