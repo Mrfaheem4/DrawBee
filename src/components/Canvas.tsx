@@ -9,44 +9,43 @@ import {
   Group,
 } from "react-konva";
 import { useCanvas } from "../context/CanvasContext";
-import StickyNote, { type NoteColor } from "./StickyNote";
-import Toolbar from "./ToolBar";
+import StickyNote from "./StickyNote";
 import { exportCanvas } from "../utils/exportCanvas";
-
-interface DrawingLine {
-  tool: string;
-  points: number[];
-  color: string;
-  width: number;
-}
-
-interface TextBox {
-  id: string;
-  text: string;
-  x: number;
-  y: number;
-  width: number;
-  color: string;
-  rotation: number;
-}
-
-interface StickyNoteItem {
-  id: string;
-  x: number;
-  y: number;
-  title: string;
-  content: string;
-  color: NoteColor;
-  rotation: number;
-  isEditing: boolean;
-}
+import {
+  type DrawingLine,
+  type TextBox,
+  type StickyNoteItem,
+} from "../hooks/useWhiteboard";
+import Toolbar from "./ToolBar";
 
 const FONT_SIZE = 18;
 const FONT_FAMILY = "sans-serif";
 const MIN_WIDTH = 150;
 const PADDING = 8;
 
-const Canvas = () => {
+interface CanvasProps {
+  lines: DrawingLine[];
+  setLines: React.Dispatch<React.SetStateAction<DrawingLine[]>>;
+  textBoxes: TextBox[];
+  setTextBoxes: React.Dispatch<React.SetStateAction<TextBox[]>>;
+  stickyNotes: StickyNoteItem[];
+  setStickyNotes: React.Dispatch<React.SetStateAction<StickyNoteItem[]>>;
+  pushHistory: (
+    newLines: DrawingLine[],
+    newTextBoxes: TextBox[],
+    newStickyNotes: StickyNoteItem[],
+  ) => void;
+}
+
+const Canvas = ({
+  lines,
+  setLines,
+  textBoxes,
+  setTextBoxes,
+  stickyNotes,
+  setStickyNotes,
+  pushHistory,
+}: CanvasProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<any>(null);
   const transformerRef = useRef<any>(null);
@@ -64,9 +63,6 @@ const Canvas = () => {
 
   const { fabricRef, activeTool, strokeColor, strokeWidth } = useCanvas();
 
-  const [lines, setLines] = useState<DrawingLine[]>([]);
-  const [textBoxes, setTextBoxes] = useState<TextBox[]>([]);
-  const [stickyNotes, setStickyNotes] = useState<StickyNoteItem[]>([]);
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -76,19 +72,15 @@ const Canvas = () => {
   useEffect(() => {
     scaleRef.current = scale;
   }, [scale]);
-
   useEffect(() => {
     positionRef.current = position;
   }, [position]);
-
   useEffect(() => {
     strokeColorRef.current = strokeColor;
   }, [strokeColor]);
-
   useEffect(() => {
     strokeWidthRef.current = strokeWidth;
   }, [strokeWidth]);
-
   useEffect(() => {
     activeToolRef.current = activeTool;
   }, [activeTool]);
@@ -170,6 +162,7 @@ const Canvas = () => {
       setPosition,
     });
   };
+
   const handleStageMouseDown = (e: any) => {
     const stage = stageRef.current;
     const onBackground = e.target === stage;
@@ -188,19 +181,19 @@ const Canvas = () => {
     if (tool === "sticky" && onBackground) {
       const world = toWorld(e.evt.clientX, e.evt.clientY);
       const id = `sticky_${Date.now()}`;
-      setStickyNotes((prev) => [
-        ...prev,
-        {
-          id,
-          x: world.x,
-          y: world.y,
-          title: "Quick Note",
-          content: "",
-          color: "yellow",
-          rotation: 0,
-          isEditing: false,
-        },
-      ]);
+      const newNote: StickyNoteItem = {
+        id,
+        x: world.x,
+        y: world.y,
+        title: "Quick Note",
+        content: "",
+        color: "yellow",
+        rotation: 0,
+        isEditing: false,
+      };
+      const newNotes = [...stickyNotes, newNote];
+      setStickyNotes(newNotes);
+      pushHistory(lines, textBoxes, newNotes);
       return;
     }
 
@@ -265,12 +258,14 @@ const Canvas = () => {
   };
 
   const handleStageMouseUp = () => {
+    if (isDrawing.current) {
+      pushHistory(lines, textBoxes, stickyNotes);
+    }
     isDrawing.current = false;
     isPanning.current = false;
   };
 
   const handleStageDblClick = (e: any) => {
-    // Start panning on double click on background
     if (e.target !== stageRef.current) return;
     isPanning.current = true;
     lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
@@ -297,9 +292,11 @@ const Canvas = () => {
   };
 
   const commitEdit = () => {
-    setTextBoxes((prev) =>
-      prev.filter((tb) => tb.id !== editingId || tb.text.trim() !== ""),
+    const updated = textBoxes.filter(
+      (tb) => tb.id !== editingId || tb.text.trim() !== "",
     );
+    setTextBoxes(updated);
+    pushHistory(lines, updated, stickyNotes);
     setEditingId(null);
   };
 
@@ -309,10 +306,8 @@ const Canvas = () => {
     : null;
 
   return (
-    <div className="w-full h-full flex">
-      {/* Toolbar sits outside the export container so it won't appear in exports */}
+    <div className="flex w-full h-full">
       <Toolbar onExport={handleExport} />
-
       <div
         ref={containerRef}
         className="flex-1 bg-white relative overflow-hidden"
@@ -433,10 +428,7 @@ const Canvas = () => {
               if (activeTool !== "select") return;
               e.stopPropagation();
               setStickyNotes((prev) =>
-                prev.map((n) => ({
-                  ...n,
-                  isEditing: n.id === note.id,
-                })),
+                prev.map((n) => ({ ...n, isEditing: n.id === note.id })),
               );
             }}
             onMouseDown={(e) => {
