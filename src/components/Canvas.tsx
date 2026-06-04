@@ -55,7 +55,6 @@ const Canvas = () => {
   const isDrawing = useRef(false);
   const isPanning = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
-  const isSpacePressedRef = useRef(false);
 
   const scaleRef = useRef(1);
   const positionRef = useRef({ x: 0, y: 0 });
@@ -175,8 +174,6 @@ const Canvas = () => {
     const stage = stageRef.current;
     const onBackground = e.target === stage;
 
-    // Middle mouse button panning (keep this)
-    // Middle mouse button OR select tool on background = pan
     if (
       e.evt.button === 1 ||
       (activeToolRef.current === "select" && onBackground)
@@ -316,7 +313,6 @@ const Canvas = () => {
       {/* Toolbar sits outside the export container so it won't appear in exports */}
       <Toolbar onExport={handleExport} />
 
-      {/* This div is what gets captured by html2canvas */}
       <div
         ref={containerRef}
         className="flex-1 bg-white relative overflow-hidden"

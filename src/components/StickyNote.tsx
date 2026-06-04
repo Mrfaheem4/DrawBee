@@ -76,7 +76,7 @@ const StickyNote: React.FC<StickyNoteProps> = ({
   initialDate = new Date().toLocaleDateString(),
   initialColor = "yellow",
   readOnly = false,
-  onUpdate, // ← ADD 2: destructure it
+  onUpdate,
 }) => {
   const [title, setTitle] = useState(initialTitle);
   const [content, setContent] = useState(initialContent);
@@ -88,7 +88,6 @@ const StickyNote: React.FC<StickyNoteProps> = ({
     setRotation(Math.random() * 4 - 2);
   }, []);
 
-  // ← ADD 3: bubble changes up to Canvas whenever title or content changes
   useEffect(() => {
     onUpdate?.(title, content);
   }, [title, content]);
@@ -142,7 +141,6 @@ const StickyNote: React.FC<StickyNoteProps> = ({
           </svg>
         </div>
 
-        {/* Content — pointer events blocked when readOnly */}
         <div
           className="z-10 flex flex-col flex-grow gap-4"
           style={{ pointerEvents: readOnly ? "none" : "auto" }}
