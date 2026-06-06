@@ -5,7 +5,7 @@ const LoginCard = () => {
 
   return (
     <div className="flex h-screen w-full items-center justify-center bg-[url('/background.png')] bg-cover bg-center p-4">
-      <div className="flex flex-col md:flex-row items-center justify-center gap-10 w-full max-w-6xl h-full">
+      <div className="flex flex-col md:flex-row items-center justify-center gap-30 w-full max-w-6xl h-full">
         {/* Left: Logo */}
         <div className="flex flex-col items-center md:items-start text-center md:text-left bottom">
           <img src="/logo.png" alt="Draw Bee Logo" className="h-80" />
@@ -25,7 +25,7 @@ const LoginCard = () => {
             <h2 className="text-3xl font-semibold text-gray-800 text-center">
               Welcome!
             </h2>
-            <p className="text-gray-700 text-center">
+            <p className="text-gray-400 text-center">
               Login to continue drawing.
             </p>
           </div>

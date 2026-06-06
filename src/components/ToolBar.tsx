@@ -19,7 +19,8 @@ const Toolbar = ({ onExport }: ToolbarProps) => {
   const { activeTool, setActiveTool } = useCanvas();
 
   return (
-    <div className="w-16 bg-gray-900 border-r border-gray-700 flex flex-col items-center py-6 gap-1">
+    <div className=" scale-125  absolute left-8  w-14  top-1/2  -translate-y-[55%] z-50 flex flex-col items-center gap-2 py-3 rounded-2xl bg-white/40 border-2 border-white/40 backdrop-blur-lg shadow-xl ">
+      {" "}
       {/* Tools */}
       {tools.map((tool) => (
         <button
@@ -27,27 +28,23 @@ const Toolbar = ({ onExport }: ToolbarProps) => {
           onClick={() => setActiveTool(tool.id)}
           title={tool.label}
           className={`
-            w-10 h-10 rounded-lg flex items-center justify-center transition-colors
+            w-11 h-11 rounded-full flex items-center justify-center transition-colors
             ${
               activeTool === tool.id
-                ? "bg-blue-600 text-white"
-                : "text-gray-400 hover:bg-gray-700 hover:text-white"
+                ? "bg-white/90"
+                : "text-black-400 bg-white/40  hover:bg-gray-700 hover:text-white"
             }
           `}
         >
           {tool.icon}
         </button>
       ))}
-
       {/* Divider */}
       <div className="w-8 h-px bg-gray-700 my-2" />
-
       {/* Color Picker */}
       <ColorPickerPopup />
-
       {/* Divider */}
       <div className="w-8 h-px bg-gray-700 my-2" />
-
       {/* Export buttons */}
       {(["png", "jpeg", "svg"] as const).map((fmt) => (
         <button

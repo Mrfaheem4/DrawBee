@@ -307,11 +307,19 @@ const Canvas = ({
     : null;
 
   return (
-    <div className="flex w-full h-full">
+    <div className="relative w-full h-full">
       <Toolbar onExport={handleExport} />
       <div
         ref={containerRef}
-        className="flex-1 bg-white relative overflow-hidden"
+        className="absolute bg-white   overflow-hidden"
+        style={{
+          left: 120,
+          top: 40,
+          right: 80,
+          bottom: 40,
+          borderRadius: 20,
+          boxShadow: "0 4px 20px rgba(0,0,0,0.1)",
+        }}
       >
         <Stage
           ref={stageRef}
