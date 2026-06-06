@@ -10,7 +10,6 @@ import {
 export type Tool = "select" | "pen" | "text" | "sticky" | "eraser";
 
 interface CanvasContextType {
-  // Swapped from FabricCanvas to any to store Konva's Stage reference smoothly
   fabricRef: RefObject<any>;
   activeTool: Tool;
   setActiveTool: (tool: Tool) => void;
@@ -23,7 +22,7 @@ interface CanvasContextType {
 const CanvasContext = createContext<CanvasContextType | null>(null);
 
 export const CanvasProvider = ({ children }: { children: ReactNode }) => {
-  // Holds the Konva Stage reference instance instead of old Fabric layers
+  // Holds the Konva Stage reference instance
   const fabricRef = useRef<any>(null);
   const [activeTool, setActiveTool] = useState<Tool>("select");
   const [strokeColor, setStrokeColor] = useState("#000000");

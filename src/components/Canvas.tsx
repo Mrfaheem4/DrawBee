@@ -118,10 +118,11 @@ const Canvas = ({
 
   useEffect(() => {
     if (editingId && textAreaRef.current) {
-      setTimeout(() => {
+      const id = setTimeout(() => {
         textAreaRef.current?.focus();
         autoResize();
       }, 0);
+      return () => clearTimeout(id);
     }
   }, [editingId]);
 
