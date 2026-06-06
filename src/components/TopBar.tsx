@@ -41,15 +41,26 @@ const TopBar = ({ onUndo, onRedo, canUndo, canRedo }: TopBarProps) => {
         <span className="text-gray-800 text-3xl">Drawbee</span>
       </div>
 
-      {/* Right — logout */}
-      <div style={{ marginRight: "2rem" }}>
-        <button
-          onClick={handleLogout}
-          className="rounded-xl bg-white/20 border-2 border-white/40 text-gray-700 hover:bg-white/40 transition-colors"
-          style={{ padding: "5px 20px" }}
-        >
-          Log Out
-        </button>
+      <div className="flex gap-2">
+        <div>
+          <button
+            className="rounded-xl bg-white/20 border-2 border-white/40 text-gray-700 hover:bg-white/40 transition-colors"
+            style={{ padding: "5px 20px", marginLeft: "10px" }}
+          >
+            Invite
+          </button>
+        </div>
+
+        {/* Right — logout */}
+        <div style={{ marginRight: "2rem" }}>
+          <button
+            onClick={handleLogout}
+            className="rounded-xl bg-white/20 border-2 border-white/40 text-gray-700 hover:bg-white/40 transition-colors"
+            style={{ padding: "5px 20px" }}
+          >
+            Log Out
+          </button>
+        </div>
       </div>
     </div>
   );
