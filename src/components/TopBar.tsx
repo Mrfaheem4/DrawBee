@@ -1,5 +1,5 @@
 import { Undo2, Redo2 } from "lucide-react";
-import { useAuth0 } from "@auth0/auth0-react";
+import { supabase } from "../config/supabase";
 
 interface TopBarProps {
   onUndo: () => void;
@@ -9,7 +9,9 @@ interface TopBarProps {
 }
 
 const TopBar = ({ onUndo, onRedo, canUndo, canRedo }: TopBarProps) => {
-  const { logout } = useAuth0();
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+  };
 
   return (
     <div className="h-20 flex items-center relative">
@@ -42,9 +44,7 @@ const TopBar = ({ onUndo, onRedo, canUndo, canRedo }: TopBarProps) => {
       {/* Right — logout */}
       <div style={{ marginRight: "2rem" }}>
         <button
-          onClick={() =>
-            logout({ logoutParams: { returnTo: window.location.origin } })
-          }
+          onClick={handleLogout}
           className="rounded-xl bg-white/20 border-2 border-white/40 text-gray-700 hover:bg-white/40 transition-colors"
           style={{ padding: "5px 20px" }}
         >
