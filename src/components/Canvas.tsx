@@ -91,13 +91,17 @@ const Canvas = ({
 
   useEffect(() => {
     if (!containerRef.current) return;
+
     const ro = new ResizeObserver(() => {
-      const rect = containerRef.current!.getBoundingClientRect();
+      if (!containerRef.current) return; // ← add this check
+      const rect = containerRef.current.getBoundingClientRect();
       setDimensions({ width: rect.width, height: rect.height });
     });
+
     ro.observe(containerRef.current);
     const rect = containerRef.current.getBoundingClientRect();
     setDimensions({ width: rect.width, height: rect.height });
+
     return () => ro.disconnect();
   }, []);
 
@@ -125,6 +129,33 @@ const Canvas = ({
       return () => clearTimeout(id);
     }
   }, [editingId]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Delete" && e.key !== "Backspace") return;
+      if (editingId) return; // don't delete while typing
+
+      // Delete selected text box
+      if (selectedId) {
+        const newTextBoxes = textBoxes.filter((tb) => tb.id !== selectedId);
+        setTextBoxes(newTextBoxes);
+        pushHistory(lines, newTextBoxes, stickyNotes);
+        setSelectedId(null);
+        return;
+      }
+
+      // Delete selected sticky note
+      const selectedNote = stickyNotes.find((n) => n.isEditing);
+      if (selectedNote) {
+        const newNotes = stickyNotes.filter((n) => n.id !== selectedNote.id);
+        setStickyNotes(newNotes);
+        pushHistory(lines, textBoxes, newNotes);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [selectedId, editingId, textBoxes, stickyNotes, lines]);
 
   const autoResize = () => {
     const ta = textAreaRef.current;

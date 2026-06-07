@@ -1,8 +1,11 @@
 import TopBar from "./TopBar";
 import Canvas from "./Canvas";
 import { useWhiteboard } from "../hooks/useWhiteboard";
+import { useBoard } from "../hooks/useBoard";
 
 const WhiteboardPage = () => {
+  const { boardId } = useBoard();
+
   const {
     lines,
     setLines,
@@ -15,11 +18,17 @@ const WhiteboardPage = () => {
     redo,
     canUndo,
     canRedo,
-  } = useWhiteboard();
+  } = useWhiteboard(boardId); // ← pass boardId here
 
   return (
     <div className="w-full h-full flex flex-col">
-      <TopBar onUndo={undo} onRedo={redo} canUndo={canUndo} canRedo={canRedo} />
+      <TopBar
+        onUndo={undo}
+        onRedo={redo}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        boardId={boardId ?? undefined}
+      />
       <div className="flex flex-1 overflow-hidden">
         <Canvas
           lines={lines}

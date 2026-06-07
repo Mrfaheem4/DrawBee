@@ -31,8 +31,8 @@ const Toolbar = ({ onExport }: ToolbarProps) => {
             w-11 h-11 rounded-full flex items-center justify-center transition-colors
             ${
               activeTool === tool.id
-                ? "bg-white/90"
-                : "text-black-400 bg-white/40  hover:bg-gray-700 hover:text-white"
+                ? "bg-white/90 border-amber-500 border-2"
+                : "text-black-400 bg-white/40  hover:bg-gray-800 hover:text-white "
             }
           `}
         >

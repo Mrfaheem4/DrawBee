@@ -67,7 +67,8 @@ interface StickyNoteProps {
   initialDate?: string;
   initialColor?: NoteColor;
   readOnly?: boolean;
-  onUpdate?: (title: string, content: string) => void; // ← ADD 1: new prop
+  onUpdate?: (title: string, content: string) => void;
+  onDelete?: () => void;
 }
 
 const StickyNote: React.FC<StickyNoteProps> = ({

@@ -6,11 +6,22 @@ interface TopBarProps {
   onRedo: () => void;
   canUndo: boolean;
   canRedo: boolean;
+  boardId?: string;
 }
 
-const TopBar = ({ onUndo, onRedo, canUndo, canRedo }: TopBarProps) => {
+const TopBar = ({ onUndo, onRedo, canUndo, canRedo, boardId }: TopBarProps) => {
   const handleLogout = async () => {
     await supabase.auth.signOut();
+  };
+
+  const handleCopyLink = () => {
+    if (!boardId) {
+      alert("Board not ready yet!");
+      return;
+    }
+    const link = `${window.location.origin}/board/${boardId}`;
+    navigator.clipboard.writeText(link);
+    alert("Invite link copied! 🐝");
   };
 
   return (
@@ -44,6 +55,7 @@ const TopBar = ({ onUndo, onRedo, canUndo, canRedo }: TopBarProps) => {
       <div className="flex gap-2">
         <div>
           <button
+            onClick={handleCopyLink}
             className="rounded-xl bg-white/20 border-2 border-white/40 text-gray-700 hover:bg-white/40 transition-colors"
             style={{ padding: "5px 20px", marginLeft: "10px" }}
           >
