@@ -66,8 +66,9 @@ interface StickyNoteProps {
   initialContent?: string;
   initialDate?: string;
   initialColor?: NoteColor;
+  /** When true, text inputs are read-only but the note is still interactable (pin, drag, etc.) */
   readOnly?: boolean;
-  onUpdate?: (title: string, content: string) => void;
+  onUpdate?: (title: string, content: string, color: NoteColor) => void;
   onDelete?: () => void;
 }
 
@@ -83,41 +84,46 @@ const StickyNote: React.FC<StickyNoteProps> = ({
   const [content, setContent] = useState(initialContent);
   const [date, setDate] = useState(initialDate);
   const [color, setColor] = useState<NoteColor>(initialColor);
-  const [rotation, setRotation] = useState(0);
+  const [rotation] = useState(() => Math.random() * 4 - 2);
 
+  // Sync props → local state when parent updates (e.g. after load from DB)
   useEffect(() => {
-    setRotation(Math.random() * 4 - 2);
-  }, []);
-
+    setTitle(initialTitle);
+  }, [initialTitle]);
   useEffect(() => {
-    onUpdate?.(title, content);
-  }, [title, content]);
+    setContent(initialContent);
+  }, [initialContent]);
+  useEffect(() => {
+    setColor(initialColor);
+  }, [initialColor]);
 
   const config = COLOR_MAP[color];
 
-  const cycleColor = () => {
+  const cycleColor = (e: React.MouseEvent) => {
+    // Stop so the note doesn't receive a click/mousedown that would interfere
+    e.stopPropagation();
     const colors = Object.keys(COLOR_MAP) as NoteColor[];
-    const currentIndex = colors.indexOf(color);
-    setColor(colors[(currentIndex + 1) % colors.length]);
+    const nextColor = colors[(colors.indexOf(color) + 1) % colors.length];
+    setColor(nextColor);
+    onUpdate?.(title, content, nextColor);
   };
 
   return (
     <div style={{ width: "20rem" }}>
       <div
-        className="group relative w-[20rem]  p-8 pt-12 flex flex-col rounded-2xl transition-all duration-300 ease-out hover:-translate-y-2 hover:scale-[1.02]"
+        className="group relative w-[20rem] p-8 pt-12 flex flex-col rounded-2xl transition-all duration-300 ease-out hover:-translate-y-2 hover:scale-[1.02]"
         style={{
           backgroundColor: config.bg,
           transform: `rotate(${rotation}deg)`,
           boxShadow: "10px 10px 25px rgba(0, 0, 0, 0.1)",
-          cursor: readOnly ? "move" : "default",
         }}
       >
-        {/* Pin — always has pointer events */}
+        {/* Pin — always interactive, stops propagation so it never triggers drag */}
         <div
           className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-6 z-30 drop-shadow-lg cursor-pointer transition-transform hover:scale-110 active:scale-95"
+          onMouseDown={(e) => e.stopPropagation()}
           onClick={cycleColor}
           title="Click to change color"
-          style={{ pointerEvents: "auto" }}
         >
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
             <line
@@ -142,25 +148,36 @@ const StickyNote: React.FC<StickyNoteProps> = ({
           </svg>
         </div>
 
-        <div
-          className="z-10 flex flex-col flex-grow gap-4"
-          style={{ pointerEvents: readOnly ? "none" : "auto" }}
-        >
+        {/* Content area — pointer events always on; readOnly only controls input editability */}
+        <div className="z-10 flex flex-col flex-grow gap-4">
           <input
             type="text"
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => {
+              if (readOnly) return;
+              setTitle(e.target.value);
+              onUpdate?.(e.target.value, content, color);
+            }}
+            onMouseDown={(e) => {
+              // Allow text cursor when editing; block mousedown from bubbling to drag handler
+              if (!readOnly) e.stopPropagation();
+            }}
             className="w-full bg-transparent text-2xl font-bold text-slate-800 tracking-tight border-none outline-none focus:ring-0 p-0 placeholder-slate-400/50"
             placeholder="Title"
             readOnly={readOnly}
+            style={{ cursor: readOnly ? "default" : "text" }}
           />
           <textarea
             value={content}
             onChange={(e) => {
+              if (readOnly) return;
               setContent(e.target.value);
-              // Auto-resize
               e.target.style.height = "auto";
               e.target.style.height = `${e.target.scrollHeight}px`;
+              onUpdate?.(title, e.target.value, color);
+            }}
+            onMouseDown={(e) => {
+              if (!readOnly) e.stopPropagation();
             }}
             className="w-full flex-grow bg-transparent text-base leading-relaxed text-slate-700 border-none outline-none focus:ring-0 resize-none p-0 placeholder-slate-400/50"
             placeholder="Write your note here..."
@@ -170,24 +187,27 @@ const StickyNote: React.FC<StickyNoteProps> = ({
               fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
               height: "auto",
               overflow: "hidden",
+              cursor: readOnly ? "default" : "text",
             }}
           />
         </div>
 
-        {/* Footer — pointer events blocked when readOnly */}
-        <div
-          className="z-10 mt-4 pt-3 border-t border-black/5 flex justify-between items-center"
-          style={{ pointerEvents: readOnly ? "none" : "auto" }}
-        >
+        {/* Footer */}
+        <div className="z-10 mt-4 pt-3 border-t border-black/5 flex justify-between items-center">
           <input
             type="text"
             value={date}
-            onChange={(e) => setDate(e.target.value)}
+            onChange={(e) => {
+              if (!readOnly) setDate(e.target.value);
+            }}
+            onMouseDown={(e) => {
+              if (!readOnly) e.stopPropagation();
+            }}
             className="bg-transparent text-xs font-bold uppercase tracking-widest text-slate-500 border-none outline-none focus:ring-0 p-0 w-1/2"
             readOnly={readOnly}
           />
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter opacity-0 group-hover:opacity-100 transition-opacity">
-            Tap pin to change color
+            {readOnly ? "Double-click to edit" : "Tap pin to change color"}
           </span>
         </div>
 

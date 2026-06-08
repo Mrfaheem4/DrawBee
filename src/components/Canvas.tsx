@@ -22,6 +22,7 @@ const FONT_SIZE = 18;
 const FONT_FAMILY = "sans-serif";
 const MIN_WIDTH = 150;
 const PADDING = 8;
+const DRAG_THRESHOLD = 5;
 
 interface CanvasProps {
   lines: DrawingLine[];
@@ -54,7 +55,6 @@ const Canvas = ({
   setStickyNotes,
   pushHistory,
   dbAddLine,
-  dbDeleteLine,
   dbAddTextBox,
   dbUpdateTextBox,
   dbDeleteTextBox,
@@ -67,15 +67,31 @@ const Canvas = ({
   const transformerRef = useRef<any>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
 
+  // ── Drawing state ──────────────────────────────────────────────────────────
   const isDrawing = useRef(false);
   const isPanning = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
+  // Stable id assigned at stroke-start; used to find the right line after async DB commit
+  const pendingLineIdRef = useRef<string | null>(null);
 
+  // ── Always-current mirrors of props for use in async/closure contexts ──────
+  const textBoxesRef = useRef<TextBox[]>(textBoxes);
+  const stickyNotesRef = useRef<StickyNoteItem[]>(stickyNotes);
+  useEffect(() => {
+    textBoxesRef.current = textBoxes;
+  }, [textBoxes]);
+  useEffect(() => {
+    stickyNotesRef.current = stickyNotes;
+  }, [stickyNotes]);
+
+  // ── Ref-backed tool/style state (avoid stale closures in event handlers) ───
   const scaleRef = useRef(1);
   const positionRef = useRef({ x: 0, y: 0 });
   const strokeColorRef = useRef("#000000");
   const strokeWidthRef = useRef(3);
   const activeToolRef = useRef("pen");
+  const isUsingStylus = useRef(false);
+  const stylusTimeoutRef = useRef<any>(null);
 
   const savedTextBoxIds = useRef<Set<string>>(new Set());
 
@@ -90,19 +106,15 @@ const Canvas = ({
   useEffect(() => {
     scaleRef.current = scale;
   }, [scale]);
-
   useEffect(() => {
     positionRef.current = position;
   }, [position]);
-
   useEffect(() => {
     strokeColorRef.current = strokeColor;
   }, [strokeColor]);
-
   useEffect(() => {
     strokeWidthRef.current = strokeWidth;
   }, [strokeWidth]);
-
   useEffect(() => {
     activeToolRef.current = activeTool;
   }, [activeTool]);
@@ -111,6 +123,7 @@ const Canvas = ({
     if (fabricRef && stageRef.current) fabricRef.current = stageRef.current;
   }, [fabricRef]);
 
+  // ── Resize observer ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!containerRef.current) return;
     const ro = new ResizeObserver(() => {
@@ -124,6 +137,7 @@ const Canvas = ({
     return () => ro.disconnect();
   }, []);
 
+  // ── Transformer sync ───────────────────────────────────────────────────────
   useEffect(() => {
     const tr = transformerRef.current;
     if (!tr) return;
@@ -139,6 +153,7 @@ const Canvas = ({
     }
   }, [selectedId, editingId, textBoxes]);
 
+  // ── Auto-focus textarea when editing starts ────────────────────────────────
   useEffect(() => {
     if (editingId && textAreaRef.current) {
       const id = setTimeout(() => {
@@ -149,6 +164,7 @@ const Canvas = ({
     }
   }, [editingId]);
 
+  // ── Keyboard delete ────────────────────────────────────────────────────────
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.key !== "Delete" && e.key !== "Backspace") return;
@@ -172,11 +188,11 @@ const Canvas = ({
         await dbDeleteStickyNote(selectedNote.id);
       }
     };
-
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [selectedId, editingId, textBoxes, stickyNotes, lines]);
 
+  // ── Helpers ────────────────────────────────────────────────────────────────
   const autoResize = () => {
     const ta = textAreaRef.current;
     if (!ta) return;
@@ -215,24 +231,57 @@ const Canvas = ({
     });
   };
 
+  // ── Commit a finished stroke to DB ─────────────────────────────────────────
+  const commitStroke = async () => {
+    const localId = pendingLineIdRef.current;
+    if (!localId) return;
+    pendingLineIdRef.current = null;
+
+    let finishedLine: DrawingLine | null = null;
+    // Read the line by its stable local id — never by index
+    setLines((prev) => {
+      finishedLine = prev.find((l) => l.id === localId) ?? null;
+      return prev;
+    });
+
+    if (!finishedLine) return;
+
+    const dbId = await dbAddLine(finishedLine);
+    if (!dbId) return; // keep local id if DB returned nothing
+
+    // Swap local id → DB id on the exact line, safe across concurrent strokes
+    setLines((prev) => {
+      const updated = prev.map((l) =>
+        l.id === localId ? { ...l, id: dbId } : l,
+      );
+      pushHistory(updated, textBoxesRef.current, stickyNotesRef.current);
+      return updated;
+    });
+  };
+
+  // ── Stage mouse handlers ───────────────────────────────────────────────────
   const handleStageMouseDown = (e: any) => {
+    if (e.evt.pointerType && e.evt.pointerType !== "mouse") {
+      isUsingStylus.current = true;
+      return;
+    }
+    if (isUsingStylus.current) return;
+
     const stage = stageRef.current;
     const onBackground = e.target === stage;
+    const tool = activeToolRef.current;
 
-    if (
-      e.evt.button === 1 ||
-      (activeToolRef.current === "select" && onBackground)
-    ) {
+    // Middle-click pan, or select-tool pan on empty canvas
+    if (e.evt.button === 1 || (tool === "select" && onBackground)) {
       isPanning.current = true;
       lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
       return;
     }
 
-    const tool = activeToolRef.current;
-
+    // Sticky tool: place note
     if (tool === "sticky" && onBackground) {
       const world = toWorld(e.evt.clientX, e.evt.clientY);
-      const id = `sticky_${Date.now()}`;
+      const id = `sticky_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       const newNote: StickyNoteItem = {
         id,
         x: world.x,
@@ -243,15 +292,144 @@ const Canvas = ({
         rotation: 0,
         isEditing: false,
       };
-      const newNotes = [...stickyNotes, newNote];
-      setStickyNotes(newNotes);
-      pushHistory(lines, textBoxes, newNotes);
+      setStickyNotes((prev) => {
+        const next = [...prev, newNote];
+        pushHistory(lines, textBoxesRef.current, next);
+        return next;
+      });
+      dbAddStickyNote(newNote);
+      return;
+    }
+
+    // Text tool: place textbox
+    if (tool === "text" && onBackground) {
+      const world = toWorld(e.evt.clientX, e.evt.clientY);
+      const id = `tb_${Date.now()}`;
+      setTextBoxes((prev) => [
+        ...prev,
+        {
+          id,
+          text: "",
+          x: world.x,
+          y: world.y,
+          width: MIN_WIDTH,
+          color: strokeColorRef.current,
+          rotation: 0,
+        },
+      ]);
+      setTimeout(() => {
+        setEditingId(id);
+        setSelectedId(null);
+      }, 0);
+      return;
+    }
+
+    // Background click with any other tool: deselect
+    if (onBackground) {
+      setSelectedId(null);
+      setEditingId(null);
+      setStickyNotes((prev) => prev.map((n) => ({ ...n, isEditing: false })));
+    }
+
+    // Drawing tools
+    if (tool !== "select" && tool !== "text" && tool !== "sticky") {
+      const world = toWorld(e.evt.clientX, e.evt.clientY);
+      const localId = `local_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      pendingLineIdRef.current = localId;
+      isDrawing.current = true;
+      setLines((prev) => [
+        ...prev,
+        {
+          id: localId,
+          tool,
+          points: [world.x, world.y],
+          color: strokeColorRef.current,
+          width: strokeWidthRef.current,
+        },
+      ]);
+    }
+  };
+
+  const handleStageMouseMove = (e: any) => {
+    if (isUsingStylus.current) return;
+
+    if (isPanning.current) {
+      const dx = e.evt.clientX - lastPosRef.current.x;
+      const dy = e.evt.clientY - lastPosRef.current.y;
+      setPosition((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
+      lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
+      return;
+    }
+
+    if (!isDrawing.current || !pendingLineIdRef.current) return;
+    const world = toWorld(e.evt.clientX, e.evt.clientY);
+    const activeId = pendingLineIdRef.current;
+    setLines((prev) =>
+      prev.map((l) =>
+        l.id === activeId
+          ? { ...l, points: [...l.points, world.x, world.y] }
+          : l,
+      ),
+    );
+  };
+
+  const handleStageMouseUp = async () => {
+    if (isUsingStylus.current) return;
+    isPanning.current = false;
+    if (isDrawing.current) {
+      isDrawing.current = false;
+      await commitStroke();
+    }
+  };
+
+  // ── Touch handlers ─────────────────────────────────────────────────────────
+  const handleTouchStart = (e: any) => {
+    e.evt.preventDefault();
+    if (stylusTimeoutRef.current) {
+      clearTimeout(stylusTimeoutRef.current);
+      stylusTimeoutRef.current = null;
+    }
+
+    isDrawing.current = false;
+    isPanning.current = false;
+    isUsingStylus.current = true;
+
+    const touch = e.evt.touches[0];
+    const stage = stageRef.current;
+    const onBackground = e.target === stage;
+    const tool = activeToolRef.current;
+
+    lastPosRef.current = { x: touch.clientX, y: touch.clientY };
+
+    if (tool === "select" && onBackground && e.evt.touches.length === 1) {
+      isPanning.current = true;
+      return;
+    }
+
+    if (tool === "sticky" && onBackground) {
+      const world = toWorld(touch.clientX, touch.clientY);
+      const id = `sticky_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const newNote: StickyNoteItem = {
+        id,
+        x: world.x,
+        y: world.y,
+        title: "Quick Note",
+        content: "",
+        color: "yellow",
+        rotation: 0,
+        isEditing: false,
+      };
+      setStickyNotes((prev) => {
+        const next = [...prev, newNote];
+        pushHistory(lines, textBoxesRef.current, next);
+        return next;
+      });
       dbAddStickyNote(newNote);
       return;
     }
 
     if (tool === "text" && onBackground) {
-      const world = toWorld(e.evt.clientX, e.evt.clientY);
+      const world = toWorld(touch.clientX, touch.clientY);
       const id = `tb_${Date.now()}`;
       setTextBoxes((prev) => [
         ...prev,
@@ -279,11 +457,14 @@ const Canvas = ({
     }
 
     if (tool !== "select" && tool !== "text" && tool !== "sticky") {
-      const world = toWorld(e.evt.clientX, e.evt.clientY);
+      const world = toWorld(touch.clientX, touch.clientY);
+      const localId = `local_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      pendingLineIdRef.current = localId;
       isDrawing.current = true;
       setLines((prev) => [
         ...prev,
         {
+          id: localId,
           tool,
           points: [world.x, world.y],
           color: strokeColorRef.current,
@@ -293,46 +474,53 @@ const Canvas = ({
     }
   };
 
-  const handleStageMouseMove = (e: any) => {
+  const handleTouchMove = (e: any) => {
+    e.evt.preventDefault();
+    if (!isUsingStylus.current) return;
+    if (!e.evt.touches || e.evt.touches.length === 0) return;
+
     if (isPanning.current) {
-      const dx = e.evt.clientX - lastPosRef.current.x;
-      const dy = e.evt.clientY - lastPosRef.current.y;
+      const touch = e.evt.touches[0];
+      const dx = touch.clientX - lastPosRef.current.x;
+      const dy = touch.clientY - lastPosRef.current.y;
       setPosition((prev) => ({ x: prev.x + dx, y: prev.y + dy }));
-      lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
+      lastPosRef.current = { x: touch.clientX, y: touch.clientY };
       return;
     }
-    if (!isDrawing.current) return;
-    const world = toWorld(e.evt.clientX, e.evt.clientY);
-    setLines((prev) => {
-      const last = { ...prev[prev.length - 1] };
-      last.points = [...last.points, world.x, world.y];
-      return [...prev.slice(0, -1), last];
-    });
+
+    if (!isDrawing.current || !pendingLineIdRef.current) return;
+    const touch = e.evt.touches[0];
+    const world = toWorld(touch.clientX, touch.clientY);
+    const activeId = pendingLineIdRef.current;
+    setLines((prev) =>
+      prev.map((l) =>
+        l.id === activeId
+          ? { ...l, points: [...l.points, world.x, world.y] }
+          : l,
+      ),
+    );
   };
-  const handleStageMouseUp = async () => {
-    if (isDrawing.current) {
-      const finishedLine = lines[lines.length - 1];
-      const id = await dbAddLine(finishedLine);
-      setLines((prev) => {
-        const updated = [...prev];
-        const last = { ...updated[updated.length - 1] };
-        if (id) last.id = id;
-        updated[updated.length - 1] = last;
-        // Push history here with the updated array
-        pushHistory(updated, textBoxes, stickyNotes);
-        return updated;
-      });
+
+  const handleTouchEnd = async () => {
+    isPanning.current = false;
+    if (!isDrawing.current) {
+      if (stylusTimeoutRef.current) clearTimeout(stylusTimeoutRef.current);
+      stylusTimeoutRef.current = setTimeout(() => {
+        isUsingStylus.current = false;
+        stylusTimeoutRef.current = null;
+      }, 500);
+      return;
     }
     isDrawing.current = false;
-    isPanning.current = false;
+    await commitStroke();
+    if (stylusTimeoutRef.current) clearTimeout(stylusTimeoutRef.current);
+    stylusTimeoutRef.current = setTimeout(() => {
+      isUsingStylus.current = false;
+      stylusTimeoutRef.current = null;
+    }, 500);
   };
 
-  const handleStageDblClick = (e: any) => {
-    if (e.target !== stageRef.current) return;
-    isPanning.current = true;
-    lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
-  };
-
+  // ── Konva textbox handlers ─────────────────────────────────────────────────
   const handleTransformEnd = (e: any, id: string) => {
     const node = e.target;
     const newWidth = Math.max(node.width() * node.scaleX(), MIN_WIDTH);
@@ -351,9 +539,7 @@ const Canvas = ({
     );
     setTextBoxes(updated);
     const box = updated.find((tb) => tb.id === id);
-    if (box && savedTextBoxIds.current.has(id)) {
-      dbUpdateTextBox(box);
-    }
+    if (box && savedTextBoxIds.current.has(id)) dbUpdateTextBox(box);
   };
 
   const commitEdit = async () => {
@@ -377,10 +563,80 @@ const Canvas = ({
         savedTextBoxIds.current.add(box.id);
       }
     }
-
     setEditingId(null);
   };
 
+  // ── Sticky note DOM handlers ───────────────────────────────────────────────
+  const handleNoteMouseDown = (e: React.MouseEvent, note: StickyNoteItem) => {
+    // Only intercept with select tool — all other tools let events fall through
+    // to the stage so drawing/placement works correctly even near notes.
+    if (activeToolRef.current !== "select") return;
+
+    e.stopPropagation();
+
+    // If the note is in edit mode, don't start a drag
+    if (note.isEditing) return;
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const offsetX =
+      (e.clientX - positionRef.current.x) / scaleRef.current - note.x;
+    const offsetY =
+      (e.clientY - positionRef.current.y) / scaleRef.current - note.y;
+    let hasMoved = false;
+
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!hasMoved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+      hasMoved = true;
+      setStickyNotes((prev) =>
+        prev.map((n) =>
+          n.id === note.id
+            ? {
+                ...n,
+                x:
+                  (ev.clientX - positionRef.current.x) / scaleRef.current -
+                  offsetX,
+                y:
+                  (ev.clientY - positionRef.current.y) / scaleRef.current -
+                  offsetY,
+              }
+            : n,
+        ),
+      );
+    };
+
+    const onUp = () => {
+      if (hasMoved) {
+        setStickyNotes((prev) => {
+          const moved = prev.find((n) => n.id === note.id);
+          if (moved) dbUpdateStickyNote(moved);
+          return prev;
+        });
+      }
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const handleNoteDoubleClick = (e: React.MouseEvent, noteId: string) => {
+    if (activeToolRef.current !== "select") return;
+    e.stopPropagation();
+    setStickyNotes((prev) =>
+      prev.map((n) => ({ ...n, isEditing: n.id === noteId })),
+    );
+  };
+
+  const handleNoteClick = (e: React.MouseEvent) => {
+    // Only swallow clicks in select mode; other tools need the stage to see them
+    if (activeToolRef.current === "select") e.stopPropagation();
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   const editingBox = textBoxes.find((tb) => tb.id === editingId) ?? null;
   const textareaScreen = editingBox
     ? toScreen(editingBox.x, editingBox.y)
@@ -399,6 +655,7 @@ const Canvas = ({
           bottom: 40,
           borderRadius: 20,
           boxShadow: "0 4px 20px rgba(0,0,0,0.1)",
+          touchAction: "none",
         }}
       >
         <Stage
@@ -412,12 +669,14 @@ const Canvas = ({
           onMouseDown={handleStageMouseDown}
           onMouseMove={handleStageMouseMove}
           onMouseUp={handleStageMouseUp}
-          onDblClick={handleStageDblClick}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
         >
           <Layer>
-            {lines.map((line, i) => (
+            {lines.map((line) => (
               <Line
-                key={line.id ?? i}
+                key={line.id}
                 points={line.points}
                 stroke={line.tool === "eraser" ? "#ffffff" : line.color}
                 strokeWidth={line.tool === "eraser" ? 30 : line.width}
@@ -445,14 +704,17 @@ const Canvas = ({
                   y={tb.y}
                   rotation={tb.rotation}
                   draggable={activeTool === "select" && !isEditing}
-                  onClick={() =>
-                    activeTool === "select" && setSelectedId(tb.id)
-                  }
+                  onClick={() => {
+                    if (activeTool === "select") setSelectedId(tb.id);
+                  }}
                   onDblClick={() => {
-                    setEditingId(tb.id);
-                    setSelectedId(null);
+                    if (activeTool === "select") {
+                      setEditingId(tb.id);
+                      setSelectedId(null);
+                    }
                   }}
                   onDragEnd={(e) => {
+                    if (activeTool !== "select") return;
                     const updated = textBoxes.map((t) =>
                       t.id === tb.id
                         ? { ...t, x: e.target.x(), y: e.target.y() }
@@ -460,9 +722,8 @@ const Canvas = ({
                     );
                     setTextBoxes(updated);
                     const box = updated.find((t) => t.id === tb.id);
-                    if (box && savedTextBoxIds.current.has(tb.id)) {
+                    if (box && savedTextBoxIds.current.has(tb.id))
                       dbUpdateTextBox(box);
-                    }
                   }}
                   onTransformEnd={(e) => handleTransformEnd(e, tb.id)}
                 >
@@ -491,7 +752,9 @@ const Canvas = ({
               );
             })}
 
+            {/* Transformer needs its own stable key so React doesn't confuse it with Line/Group children */}
             <Transformer
+              key="__transformer__"
               ref={transformerRef}
               enabledAnchors={["middle-left", "middle-right"]}
               rotateEnabled
@@ -502,84 +765,41 @@ const Canvas = ({
           </Layer>
         </Stage>
 
-        {/* DOM Layer — sticky notes */}
+        {/* ── DOM Layer: sticky notes ──────────────────────────────────────── */}
         {stickyNotes.map((note) => (
           <div
             key={note.id}
             data-note-id={note.id}
-            className="absolute pointer-events-auto"
+            className="absolute"
             style={{
               left: note.x * scale + position.x,
               top: note.y * scale + position.y,
               transformOrigin: "top left",
               transform: `scale(${scale})`,
+              // Only capture pointer events in select mode.
+              // In other modes (sticky, pen, etc.) events must reach the stage.
+              pointerEvents: activeTool === "select" ? "auto" : "none",
               cursor:
-                activeTool === "select" && !note.isEditing ? "move" : "default",
+                activeTool === "select" && !note.isEditing ? "grab" : "default",
+              userSelect: note.isEditing ? "text" : "none",
             }}
-            onDoubleClick={(e) => {
-              if (activeTool !== "select") return;
-              e.stopPropagation();
-              setStickyNotes((prev) =>
-                prev.map((n) => ({ ...n, isEditing: n.id === note.id })),
-              );
-            }}
-            onMouseDown={(e) => {
-              if (activeTool !== "select") return;
-              if (note.isEditing) return;
-              e.stopPropagation();
-
-              const offsetX =
-                (e.clientX - positionRef.current.x) / scaleRef.current - note.x;
-              const offsetY =
-                (e.clientY - positionRef.current.y) / scaleRef.current - note.y;
-
-              const onMove = (ev: MouseEvent) => {
-                setStickyNotes((prev) =>
-                  prev.map((n) =>
-                    n.id === note.id
-                      ? {
-                          ...n,
-                          x:
-                            (ev.clientX - positionRef.current.x) /
-                              scaleRef.current -
-                            offsetX,
-                          y:
-                            (ev.clientY - positionRef.current.y) /
-                              scaleRef.current -
-                            offsetY,
-                        }
-                      : n,
-                  ),
-                );
-              };
-
-              const onUp = () => {
-                // save position after drag
-                setStickyNotes((prev) => {
-                  const moved = prev.find((n) => n.id === note.id);
-                  if (moved) dbUpdateStickyNote(moved);
-                  return prev;
-                });
-                window.removeEventListener("mousemove", onMove);
-                window.removeEventListener("mouseup", onUp);
-              };
-
-              window.addEventListener("mousemove", onMove);
-              window.addEventListener("mouseup", onUp);
-            }}
+            onMouseDown={(e) => handleNoteMouseDown(e, note)}
+            onDoubleClick={(e) => handleNoteDoubleClick(e, note.id)}
+            onClick={handleNoteClick}
           >
             <StickyNote
               initialTitle={note.title}
               initialContent={note.content}
               initialColor={note.color}
               readOnly={activeTool !== "select" || !note.isEditing}
-              onUpdate={(title, content) => {
+              onUpdate={(title, content, color) => {
                 setStickyNotes((prev) => {
                   const updated = prev.map((n) =>
-                    n.id === note.id ? { ...n, title, content } : n,
+                    n.id === note.id ? { ...n, title, content, color } : n,
                   );
                   const updatedNote = updated.find((n) => n.id === note.id);
-                  if (updatedNote) dbUpdateStickyNote(updatedNote);
+                  if (updatedNote)
+                    dbUpdateStickyNote({ ...updatedNote, isEditing: false });
                   return updated;
                 });
               }}
@@ -587,6 +807,7 @@ const Canvas = ({
           </div>
         ))}
 
+        {/* ── Textarea overlay for Konva textboxes ────────────────────────── */}
         {editingBox && textareaScreen && (
           <textarea
             key={editingId}
@@ -606,8 +827,8 @@ const Canvas = ({
             }}
             className="absolute outline-none border border-dashed border-blue-400 bg-transparent resize-none overflow-hidden p-0 m-0"
             style={{
-              top: textareaScreen.y + PADDING * scale,
-              left: textareaScreen.x + PADDING * scale,
+              top: textareaScreen.y + PADDING,
+              left: textareaScreen.x + PADDING,
               width: (editingBox.width - PADDING * 2) * scale,
               minHeight: FONT_SIZE * scale * 1.4,
               fontSize: FONT_SIZE * scale,
