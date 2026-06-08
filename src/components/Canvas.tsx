@@ -71,7 +71,6 @@ const Canvas = ({
   const isDrawing = useRef(false);
   const isPanning = useRef(false);
   const lastPosRef = useRef({ x: 0, y: 0 });
-  // Stable id assigned at stroke-start; used to find the right line after async DB commit
   const pendingLineIdRef = useRef<string | null>(null);
 
   // ── Always-current mirrors of props for use in async/closure contexts ──────
@@ -84,7 +83,7 @@ const Canvas = ({
     stickyNotesRef.current = stickyNotes;
   }, [stickyNotes]);
 
-  // ── Ref-backed tool/style state (avoid stale closures in event handlers) ───
+  // ── Ref-backed tool/style state ───────────────────────────────────────────
   const scaleRef = useRef(1);
   const positionRef = useRef({ x: 0, y: 0 });
   const strokeColorRef = useRef("#000000");
@@ -168,29 +167,83 @@ const Canvas = ({
   useEffect(() => {
     const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.key !== "Delete" && e.key !== "Backspace") return;
-      if (editingId) return;
 
-      if (selectedId) {
-        const newTextBoxes = textBoxes.filter((tb) => tb.id !== selectedId);
-        setTextBoxes(newTextBoxes);
-        pushHistory(lines, newTextBoxes, stickyNotes);
-        await dbDeleteTextBox(selectedId);
-        savedTextBoxIds.current.delete(selectedId);
-        setSelectedId(null);
+      // Check if any note is in edit mode
+      const isAnyNoteEditing = stickyNotesRef.current.some((n) => n.isEditing);
+
+      // If we are editing a Konva TextBox (editingId exists) or a StickyNote (isAnyNoteEditing),
+      // or if focus is in a real input field, completely abort the deletion logic.
+      const target = e.target as HTMLElement;
+      const isInputFocused =
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.isContentEditable;
+
+      if (editingId || isAnyNoteEditing || isInputFocused) {
         return;
       }
 
-      const selectedNote = stickyNotes.find((n) => n.isEditing);
-      if (selectedNote) {
-        const newNotes = stickyNotes.filter((n) => n.id !== selectedNote.id);
-        setStickyNotes(newNotes);
-        pushHistory(lines, textBoxes, newNotes);
-        await dbDeleteStickyNote(selectedNote.id);
+      // If nothing is being edited, we can proceed with deletion of selected items
+      if (selectedId) {
+        // Try deleting a textbox
+        const textBoxToDelete = textBoxesRef.current.find(
+          (tb) => tb.id === selectedId,
+        );
+        if (textBoxToDelete) {
+          const newTextBoxes = textBoxesRef.current.filter(
+            (tb) => tb.id !== selectedId,
+          );
+          setTextBoxes(newTextBoxes);
+          pushHistory(lines, newTextBoxes, stickyNotesRef.current);
+          await dbDeleteTextBox(selectedId);
+          savedTextBoxIds.current.delete(selectedId);
+          setSelectedId(null);
+          return;
+        }
+
+        // Try deleting a sticky note
+        const noteToDelete = stickyNotesRef.current.find(
+          (n) => n.id === selectedId,
+        );
+        if (noteToDelete) {
+          const newNotes = stickyNotesRef.current.filter(
+            (n) => n.id !== selectedId,
+          );
+          setStickyNotes(newNotes);
+          pushHistory(lines, textBoxesRef.current, newNotes);
+          await dbDeleteStickyNote(selectedId);
+          setSelectedId(null);
+          return;
+        }
       }
     };
+
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [selectedId, editingId, textBoxes, stickyNotes, lines]);
+  }, [
+    selectedId,
+    editingId,
+    lines,
+    setTextBoxes,
+    setStickyNotes,
+    pushHistory,
+    dbDeleteTextBox,
+    dbDeleteStickyNote,
+  ]);
+
+  // Exit sticky-note edit mode when clicking anywhere outside a note
+  useEffect(() => {
+    const handleGlobalMouseDown = (e: MouseEvent) => {
+      const editingNote = stickyNotesRef.current.find((n) => n.isEditing);
+      if (!editingNote) return;
+      const noteEl = (e.target as HTMLElement).closest("[data-note-id]");
+      if (noteEl && noteEl.getAttribute("data-note-id") === editingNote.id)
+        return;
+      setStickyNotes((prev) => prev.map((n) => ({ ...n, isEditing: false })));
+    };
+    window.addEventListener("mousedown", handleGlobalMouseDown);
+    return () => window.removeEventListener("mousedown", handleGlobalMouseDown);
+  }, []);
 
   // ── Helpers ────────────────────────────────────────────────────────────────
   const autoResize = () => {
@@ -231,14 +284,12 @@ const Canvas = ({
     });
   };
 
-  // ── Commit a finished stroke to DB ─────────────────────────────────────────
   const commitStroke = async () => {
     const localId = pendingLineIdRef.current;
     if (!localId) return;
     pendingLineIdRef.current = null;
 
     let finishedLine: DrawingLine | null = null;
-    // Read the line by its stable local id — never by index
     setLines((prev) => {
       finishedLine = prev.find((l) => l.id === localId) ?? null;
       return prev;
@@ -247,9 +298,8 @@ const Canvas = ({
     if (!finishedLine) return;
 
     const dbId = await dbAddLine(finishedLine);
-    if (!dbId) return; // keep local id if DB returned nothing
+    if (!dbId) return;
 
-    // Swap local id → DB id on the exact line, safe across concurrent strokes
     setLines((prev) => {
       const updated = prev.map((l) =>
         l.id === localId ? { ...l, id: dbId } : l,
@@ -271,14 +321,12 @@ const Canvas = ({
     const onBackground = e.target === stage;
     const tool = activeToolRef.current;
 
-    // Middle-click pan, or select-tool pan on empty canvas
     if (e.evt.button === 1 || (tool === "select" && onBackground)) {
       isPanning.current = true;
       lastPosRef.current = { x: e.evt.clientX, y: e.evt.clientY };
       return;
     }
 
-    // Sticky tool: place note
     if (tool === "sticky" && onBackground) {
       const world = toWorld(e.evt.clientX, e.evt.clientY);
       const id = `sticky_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -301,7 +349,6 @@ const Canvas = ({
       return;
     }
 
-    // Text tool: place textbox
     if (tool === "text" && onBackground) {
       const world = toWorld(e.evt.clientX, e.evt.clientY);
       const id = `tb_${Date.now()}`;
@@ -324,29 +371,10 @@ const Canvas = ({
       return;
     }
 
-    // Background click with any other tool: deselect
     if (onBackground) {
       setSelectedId(null);
       setEditingId(null);
       setStickyNotes((prev) => prev.map((n) => ({ ...n, isEditing: false })));
-    }
-
-    // Drawing tools
-    if (tool !== "select" && tool !== "text" && tool !== "sticky") {
-      const world = toWorld(e.evt.clientX, e.evt.clientY);
-      const localId = `local_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      pendingLineIdRef.current = localId;
-      isDrawing.current = true;
-      setLines((prev) => [
-        ...prev,
-        {
-          id: localId,
-          tool,
-          points: [world.x, world.y],
-          color: strokeColorRef.current,
-          width: strokeWidthRef.current,
-        },
-      ]);
     }
   };
 
@@ -399,61 +427,10 @@ const Canvas = ({
     const onBackground = e.target === stage;
     const tool = activeToolRef.current;
 
-    lastPosRef.current = { x: touch.clientX, y: touch.clientY };
-
-    if (tool === "select" && onBackground && e.evt.touches.length === 1) {
+    if (tool === "select" && onBackground) {
       isPanning.current = true;
+      lastPosRef.current = { x: touch.clientX, y: touch.clientY };
       return;
-    }
-
-    if (tool === "sticky" && onBackground) {
-      const world = toWorld(touch.clientX, touch.clientY);
-      const id = `sticky_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-      const newNote: StickyNoteItem = {
-        id,
-        x: world.x,
-        y: world.y,
-        title: "Quick Note",
-        content: "",
-        color: "yellow",
-        rotation: 0,
-        isEditing: false,
-      };
-      setStickyNotes((prev) => {
-        const next = [...prev, newNote];
-        pushHistory(lines, textBoxesRef.current, next);
-        return next;
-      });
-      dbAddStickyNote(newNote);
-      return;
-    }
-
-    if (tool === "text" && onBackground) {
-      const world = toWorld(touch.clientX, touch.clientY);
-      const id = `tb_${Date.now()}`;
-      setTextBoxes((prev) => [
-        ...prev,
-        {
-          id,
-          text: "",
-          x: world.x,
-          y: world.y,
-          width: MIN_WIDTH,
-          color: strokeColorRef.current,
-          rotation: 0,
-        },
-      ]);
-      setTimeout(() => {
-        setEditingId(id);
-        setSelectedId(null);
-      }, 0);
-      return;
-    }
-
-    if (onBackground) {
-      setSelectedId(null);
-      setEditingId(null);
-      setStickyNotes((prev) => prev.map((n) => ({ ...n, isEditing: false })));
     }
 
     if (tool !== "select" && tool !== "text" && tool !== "sticky") {
@@ -475,10 +452,6 @@ const Canvas = ({
   };
 
   const handleTouchMove = (e: any) => {
-    e.evt.preventDefault();
-    if (!isUsingStylus.current) return;
-    if (!e.evt.touches || e.evt.touches.length === 0) return;
-
     if (isPanning.current) {
       const touch = e.evt.touches[0];
       const dx = touch.clientX - lastPosRef.current.x;
@@ -568,14 +541,20 @@ const Canvas = ({
 
   // ── Sticky note DOM handlers ───────────────────────────────────────────────
   const handleNoteMouseDown = (e: React.MouseEvent, note: StickyNoteItem) => {
-    // Only intercept with select tool — all other tools let events fall through
-    // to the stage so drawing/placement works correctly even near notes.
     if (activeToolRef.current !== "select") return;
-
     e.stopPropagation();
 
-    // If the note is in edit mode, don't start a drag
-    if (note.isEditing) return;
+    if (note.isEditing) {
+      const tag = (e.target as HTMLElement).tagName.toLowerCase();
+      if (tag !== "input" && tag !== "textarea") {
+        setStickyNotes((prev) => prev.map((n) => ({ ...n, isEditing: false })));
+        setSelectedId(note.id);
+      }
+      return;
+    }
+
+    setSelectedId(note.id);
+    setEditingId(null);
 
     const startX = e.clientX;
     const startY = e.clientY;
@@ -626,13 +605,13 @@ const Canvas = ({
   const handleNoteDoubleClick = (e: React.MouseEvent, noteId: string) => {
     if (activeToolRef.current !== "select") return;
     e.stopPropagation();
+    setSelectedId(null);
     setStickyNotes((prev) =>
       prev.map((n) => ({ ...n, isEditing: n.id === noteId })),
     );
   };
 
   const handleNoteClick = (e: React.MouseEvent) => {
-    // Only swallow clicks in select mode; other tools need the stage to see them
     if (activeToolRef.current === "select") e.stopPropagation();
   };
 
@@ -752,7 +731,6 @@ const Canvas = ({
               );
             })}
 
-            {/* Transformer needs its own stable key so React doesn't confuse it with Line/Group children */}
             <Transformer
               key="__transformer__"
               ref={transformerRef}
@@ -765,7 +743,6 @@ const Canvas = ({
           </Layer>
         </Stage>
 
-        {/* ── DOM Layer: sticky notes ──────────────────────────────────────── */}
         {stickyNotes.map((note) => (
           <div
             key={note.id}
@@ -776,12 +753,12 @@ const Canvas = ({
               top: note.y * scale + position.y,
               transformOrigin: "top left",
               transform: `scale(${scale})`,
-              // Only capture pointer events in select mode.
-              // In other modes (sticky, pen, etc.) events must reach the stage.
               pointerEvents: activeTool === "select" ? "auto" : "none",
               cursor:
                 activeTool === "select" && !note.isEditing ? "grab" : "default",
               userSelect: note.isEditing ? "text" : "none",
+              outline: selectedId === note.id ? "2px solid #3b82f6" : "none",
+              borderRadius: "8px",
             }}
             onMouseDown={(e) => handleNoteMouseDown(e, note)}
             onDoubleClick={(e) => handleNoteDoubleClick(e, note.id)}
@@ -797,9 +774,12 @@ const Canvas = ({
                   const updated = prev.map((n) =>
                     n.id === note.id ? { ...n, title, content, color } : n,
                   );
+
                   const updatedNote = updated.find((n) => n.id === note.id);
-                  if (updatedNote)
-                    dbUpdateStickyNote({ ...updatedNote, isEditing: false });
+                  if (updatedNote) {
+                    dbUpdateStickyNote(updatedNote);
+                  }
+
                   return updated;
                 });
               }}
@@ -807,7 +787,6 @@ const Canvas = ({
           </div>
         ))}
 
-        {/* ── Textarea overlay for Konva textboxes ────────────────────────── */}
         {editingBox && textareaScreen && (
           <textarea
             key={editingId}
