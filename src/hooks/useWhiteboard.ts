@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../config/supabase";
 import { type NoteColor } from "../components/StickyNote";
 
 export interface DrawingLine {
+  id?: string;
   tool: string;
   points: number[];
   color: string;
@@ -44,20 +45,19 @@ export const useWhiteboard = (boardId: string | null) => {
     { lines: [], textBoxes: [], stickyNotes: [] },
   ]);
   const [historyIndex, setHistoryIndex] = useState(0);
+  const historyIndexRef = useRef(0);
 
-  // Load on mount
+  // ─── Load on mount ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!boardId) return;
     loadFromSupabase();
   }, [boardId]);
 
-  // Realtime sync
+  // ─── Realtime ───────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!boardId) return;
 
     const channelName = `whiteboard:${boardId}`;
-
-    // Remove any existing channel with this name first
     const existing = supabase
       .getChannels()
       .find((c) => c.topic === `realtime:${channelName}`);
@@ -65,20 +65,184 @@ export const useWhiteboard = (boardId: string | null) => {
 
     const channel = supabase.channel(channelName);
 
+    // Lines
+    channel.on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "lines",
+        filter: `whiteboard_id=eq.${boardId}`,
+      },
+      (payload) => {
+        const row = payload.new;
+        setLines((prev) => {
+          if (prev.find((l) => l.id === row.id)) return prev;
+          return [
+            ...prev,
+            {
+              id: row.id,
+              tool: row.tool,
+              points: row.points,
+              color: row.color,
+              width: row.width,
+            },
+          ];
+        });
+      },
+    );
+
+    channel.on(
+      "postgres_changes",
+      {
+        event: "DELETE",
+        schema: "public",
+        table: "lines",
+        filter: `whiteboard_id=eq.${boardId}`,
+      },
+      (payload) => {
+        setLines((prev) => prev.filter((l) => l.id !== payload.old.id));
+      },
+    );
+
+    // Text boxes
+    channel.on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "text_boxes",
+        filter: `whiteboard_id=eq.${boardId}`,
+      },
+      (payload) => {
+        const row = payload.new;
+        setTextBoxes((prev) => {
+          if (prev.find((t) => t.id === row.id)) return prev;
+          return [
+            ...prev,
+            {
+              id: row.id,
+              text: row.text,
+              x: row.x,
+              y: row.y,
+              width: row.width,
+              color: row.color,
+              rotation: row.rotation,
+            },
+          ];
+        });
+      },
+    );
+
     channel.on(
       "postgres_changes",
       {
         event: "UPDATE",
         schema: "public",
-        table: "whiteboards",
-        filter: `id=eq.${boardId}`,
+        table: "text_boxes",
+        filter: `whiteboard_id=eq.${boardId}`,
       },
       (payload) => {
-        const canvas = payload.new.canvas_data;
-        if (!canvas) return;
-        setLines(canvas.lines ?? []);
-        setTextBoxes(canvas.textBoxes ?? []);
-        setStickyNotes(canvas.stickyNotes ?? []);
+        const row = payload.new;
+        setTextBoxes((prev) =>
+          prev.map((t) =>
+            t.id === row.id
+              ? {
+                  ...t,
+                  text: row.text,
+                  x: row.x,
+                  y: row.y,
+                  width: row.width,
+                  color: row.color,
+                  rotation: row.rotation,
+                }
+              : t,
+          ),
+        );
+      },
+    );
+
+    channel.on(
+      "postgres_changes",
+      {
+        event: "DELETE",
+        schema: "public",
+        table: "text_boxes",
+        filter: `whiteboard_id=eq.${boardId}`,
+      },
+      (payload) => {
+        setTextBoxes((prev) => prev.filter((t) => t.id !== payload.old.id));
+      },
+    );
+
+    // Sticky notes
+    channel.on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "sticky_notes",
+        filter: `whiteboard_id=eq.${boardId}`,
+      },
+      (payload) => {
+        const row = payload.new;
+        setStickyNotes((prev) => {
+          if (prev.find((n) => n.id === row.id)) return prev;
+          return [
+            ...prev,
+            {
+              id: row.id,
+              x: row.x,
+              y: row.y,
+              title: row.title,
+              content: row.content,
+              color: row.color as NoteColor,
+              rotation: row.rotation,
+              isEditing: false,
+            },
+          ];
+        });
+      },
+    );
+
+    channel.on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "sticky_notes",
+        filter: `whiteboard_id=eq.${boardId}`,
+      },
+      (payload) => {
+        const row = payload.new;
+        setStickyNotes((prev) =>
+          prev.map((n) =>
+            n.id === row.id
+              ? {
+                  ...n,
+                  x: row.x,
+                  y: row.y,
+                  title: row.title,
+                  content: row.content,
+                  color: row.color as NoteColor,
+                  rotation: row.rotation,
+                }
+              : n,
+          ),
+        );
+      },
+    );
+
+    channel.on(
+      "postgres_changes",
+      {
+        event: "DELETE",
+        schema: "public",
+        table: "sticky_notes",
+        filter: `whiteboard_id=eq.${boardId}`,
+      },
+      (payload) => {
+        setStickyNotes((prev) => prev.filter((n) => n.id !== payload.old.id));
       },
     );
 
@@ -89,67 +253,186 @@ export const useWhiteboard = (boardId: string | null) => {
     };
   }, [boardId]);
 
+  // ─── Load ───────────────────────────────────────────────────────────────────
   const loadFromSupabase = async () => {
-    const { data, error } = await supabase
-      .from("whiteboards")
-      .select("canvas_data")
-      .eq("id", boardId)
-      .single();
+    const [linesRes, textBoxesRes, stickyNotesRes] = await Promise.all([
+      supabase.from("lines").select("*").eq("whiteboard_id", boardId),
+      supabase.from("text_boxes").select("*").eq("whiteboard_id", boardId),
+      supabase.from("sticky_notes").select("*").eq("whiteboard_id", boardId),
+    ]);
 
-    if (error) {
-      console.error("Load error:", error);
-      return;
-    }
+    if (linesRes.error) console.error("Lines load error:", linesRes.error);
+    if (textBoxesRes.error)
+      console.error("Text boxes load error:", textBoxesRes.error);
+    if (stickyNotesRes.error)
+      console.error("Sticky notes load error:", stickyNotesRes.error);
 
-    if (data?.canvas_data) {
-      const { lines, textBoxes, stickyNotes } = data.canvas_data;
-      setLines(lines ?? []);
-      setTextBoxes(textBoxes ?? []);
-      setStickyNotes(stickyNotes ?? []);
-      setHistory([
-        {
-          lines: lines ?? [],
-          textBoxes: textBoxes ?? [],
-          stickyNotes: stickyNotes ?? [],
-        },
-      ]);
-      setHistoryIndex(0);
-    }
+    const loadedLines = (linesRes.data ?? []).map((row) => ({
+      id: row.id,
+      tool: row.tool,
+      points: row.points,
+      color: row.color,
+      width: row.width,
+    }));
+
+    const loadedTextBoxes = (textBoxesRes.data ?? []).map((row) => ({
+      id: row.id,
+      text: row.text,
+      x: row.x,
+      y: row.y,
+      width: row.width,
+      color: row.color,
+      rotation: row.rotation,
+    }));
+
+    const loadedStickyNotes = (stickyNotesRes.data ?? []).map((row) => ({
+      id: row.id,
+      x: row.x,
+      y: row.y,
+      title: row.title,
+      content: row.content,
+      color: row.color as NoteColor,
+      rotation: row.rotation,
+      isEditing: false,
+    }));
+
+    setLines(loadedLines);
+    setTextBoxes(loadedTextBoxes);
+    setStickyNotes(loadedStickyNotes);
+    setHistory([
+      {
+        lines: loadedLines,
+        textBoxes: loadedTextBoxes,
+        stickyNotes: loadedStickyNotes,
+      },
+    ]);
+    setHistoryIndex(0);
   };
 
-  const saveToSupabase = async (
-    newLines: DrawingLine[],
-    newTextBoxes: TextBox[],
-    newStickyNotes: StickyNoteItem[],
-  ) => {
-    if (!boardId) return;
+  // ─── DB operations ──────────────────────────────────────────────────────────
+  const dbAddLine = async (line: DrawingLine) => {
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user || !boardId) return null;
 
-    const { error } = await supabase
-      .from("whiteboards")
-      .update({
-        canvas_data: {
-          lines: newLines,
-          textBoxes: newTextBoxes,
-          stickyNotes: newStickyNotes,
-        },
+    const { data, error } = await supabase
+      .from("lines")
+      .insert({
+        whiteboard_id: boardId,
+        user_id: user.id,
+        tool: line.tool,
+        points: line.points,
+        color: line.color,
+        width: line.width,
       })
-      .eq("id", boardId);
+      .select()
+      .single();
 
-    if (error) console.error("Save error:", error);
-    else console.log("Board saved ✅");
+    if (error) {
+      console.error("Add line error:", error);
+      return null;
+    }
+    return data.id as string;
   };
 
+  const dbDeleteLine = async (lineId: string) => {
+    const { error } = await supabase.from("lines").delete().eq("id", lineId);
+    if (error) console.error("Delete line error:", error);
+  };
+
+  const dbAddTextBox = async (tb: TextBox) => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user || !boardId) return;
+
+    const { error } = await supabase.from("text_boxes").insert({
+      id: tb.id,
+      whiteboard_id: boardId,
+      user_id: user.id,
+      text: tb.text,
+      x: tb.x,
+      y: tb.y,
+      width: tb.width,
+      color: tb.color,
+      rotation: tb.rotation,
+    });
+
+    if (error) console.error("Add text box error:", error);
+  };
+
+  const dbUpdateTextBox = async (tb: TextBox) => {
+    const { error } = await supabase
+      .from("text_boxes")
+      .update({
+        text: tb.text,
+        x: tb.x,
+        y: tb.y,
+        width: tb.width,
+        color: tb.color,
+        rotation: tb.rotation,
+      })
+      .eq("id", tb.id);
+
+    if (error) console.error("Update text box error:", error);
+  };
+
+  const dbDeleteTextBox = async (id: string) => {
+    const { error } = await supabase.from("text_boxes").delete().eq("id", id);
+    if (error) console.error("Delete text box error:", error);
+  };
+
+  const dbAddStickyNote = async (note: StickyNoteItem) => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user || !boardId) return;
+
+    const { error } = await supabase.from("sticky_notes").insert({
+      id: note.id,
+      whiteboard_id: boardId,
+      user_id: user.id,
+      x: note.x,
+      y: note.y,
+      title: note.title,
+      content: note.content,
+      color: note.color,
+      rotation: note.rotation,
+    });
+
+    if (error) console.error("Add sticky note error:", error);
+  };
+
+  const dbUpdateStickyNote = async (note: StickyNoteItem) => {
+    const { error } = await supabase
+      .from("sticky_notes")
+      .update({
+        x: note.x,
+        y: note.y,
+        title: note.title,
+        content: note.content,
+        color: note.color,
+        rotation: note.rotation,
+      })
+      .eq("id", note.id);
+
+    if (error) console.error("Update sticky note error:", error);
+  };
+
+  const dbDeleteStickyNote = async (id: string) => {
+    const { error } = await supabase.from("sticky_notes").delete().eq("id", id);
+    if (error) console.error("Delete sticky note error:", error);
+  };
+
+  // ─── History (local only) ───────────────────────────────────────────────────
   const pushHistory = (
     newLines: DrawingLine[],
     newTextBoxes: TextBox[],
     newStickyNotes: StickyNoteItem[],
   ) => {
     setHistory((prev) => {
-      const trimmed = prev.slice(0, historyIndex + 1);
+      const trimmed = prev.slice(0, historyIndexRef.current + 1);
       return [
         ...trimmed,
         {
@@ -159,30 +442,32 @@ export const useWhiteboard = (boardId: string | null) => {
         },
       ];
     });
-    setHistoryIndex((prev) => prev + 1);
-    saveToSupabase(newLines, newTextBoxes, newStickyNotes);
+    historyIndexRef.current += 1;
+    setHistoryIndex(historyIndexRef.current);
   };
-
   const undo = () => {
-    if (historyIndex <= 0) return;
-    const newIndex = historyIndex - 1;
-    const snapshot = history[newIndex];
-    setLines(snapshot.lines);
-    setTextBoxes(snapshot.textBoxes);
-    setStickyNotes(snapshot.stickyNotes);
-    setHistoryIndex(newIndex);
-    saveToSupabase(snapshot.lines, snapshot.textBoxes, snapshot.stickyNotes);
+    if (historyIndexRef.current <= 0) return;
+    historyIndexRef.current -= 1;
+    setHistoryIndex(historyIndexRef.current);
+    setHistory((prev) => {
+      const snapshot = prev[historyIndexRef.current];
+      setLines(snapshot.lines);
+      setTextBoxes(snapshot.textBoxes);
+      setStickyNotes(snapshot.stickyNotes);
+      return prev;
+    });
   };
-
   const redo = () => {
-    if (historyIndex >= history.length - 1) return;
-    const newIndex = historyIndex + 1;
-    const snapshot = history[newIndex];
-    setLines(snapshot.lines);
-    setTextBoxes(snapshot.textBoxes);
-    setStickyNotes(snapshot.stickyNotes);
-    setHistoryIndex(newIndex);
-    saveToSupabase(snapshot.lines, snapshot.textBoxes, snapshot.stickyNotes);
+    setHistory((prev) => {
+      if (historyIndexRef.current >= prev.length - 1) return prev;
+      historyIndexRef.current += 1;
+      setHistoryIndex(historyIndexRef.current);
+      const snapshot = prev[historyIndexRef.current];
+      setLines(snapshot.lines);
+      setTextBoxes(snapshot.textBoxes);
+      setStickyNotes(snapshot.stickyNotes);
+      return prev;
+    });
   };
 
   return {
@@ -197,5 +482,13 @@ export const useWhiteboard = (boardId: string | null) => {
     redo,
     canUndo: historyIndex > 0,
     canRedo: historyIndex < history.length - 1,
+    dbAddLine,
+    dbDeleteLine,
+    dbAddTextBox,
+    dbUpdateTextBox,
+    dbDeleteTextBox,
+    dbAddStickyNote,
+    dbUpdateStickyNote,
+    dbDeleteStickyNote,
   };
 };

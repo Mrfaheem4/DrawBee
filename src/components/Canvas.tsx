@@ -35,6 +35,14 @@ interface CanvasProps {
     newTextBoxes: TextBox[],
     newStickyNotes: StickyNoteItem[],
   ) => void;
+  dbAddLine: (line: DrawingLine) => Promise<string | null>;
+  dbDeleteLine: (id: string) => Promise<void>;
+  dbAddTextBox: (tb: TextBox) => Promise<void>;
+  dbUpdateTextBox: (tb: TextBox) => Promise<void>;
+  dbDeleteTextBox: (id: string) => Promise<void>;
+  dbAddStickyNote: (note: StickyNoteItem) => Promise<void>;
+  dbUpdateStickyNote: (note: StickyNoteItem) => Promise<void>;
+  dbDeleteStickyNote: (id: string) => Promise<void>;
 }
 
 const Canvas = ({
@@ -45,6 +53,14 @@ const Canvas = ({
   stickyNotes,
   setStickyNotes,
   pushHistory,
+  dbAddLine,
+  dbDeleteLine,
+  dbAddTextBox,
+  dbUpdateTextBox,
+  dbDeleteTextBox,
+  dbAddStickyNote,
+  dbUpdateStickyNote,
+  dbDeleteStickyNote,
 }: CanvasProps) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<any>(null);
@@ -61,6 +77,8 @@ const Canvas = ({
   const strokeWidthRef = useRef(3);
   const activeToolRef = useRef("pen");
 
+  const savedTextBoxIds = useRef<Set<string>>(new Set());
+
   const { fabricRef, activeTool, strokeColor, strokeWidth } = useCanvas();
 
   const [dimensions, setDimensions] = useState({ width: 800, height: 600 });
@@ -72,15 +90,19 @@ const Canvas = ({
   useEffect(() => {
     scaleRef.current = scale;
   }, [scale]);
+
   useEffect(() => {
     positionRef.current = position;
   }, [position]);
+
   useEffect(() => {
     strokeColorRef.current = strokeColor;
   }, [strokeColor]);
+
   useEffect(() => {
     strokeWidthRef.current = strokeWidth;
   }, [strokeWidth]);
+
   useEffect(() => {
     activeToolRef.current = activeTool;
   }, [activeTool]);
@@ -91,17 +113,14 @@ const Canvas = ({
 
   useEffect(() => {
     if (!containerRef.current) return;
-
     const ro = new ResizeObserver(() => {
-      if (!containerRef.current) return; // ← add this check
+      if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       setDimensions({ width: rect.width, height: rect.height });
     });
-
     ro.observe(containerRef.current);
     const rect = containerRef.current.getBoundingClientRect();
     setDimensions({ width: rect.width, height: rect.height });
-
     return () => ro.disconnect();
   }, []);
 
@@ -131,25 +150,26 @@ const Canvas = ({
   }, [editingId]);
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = async (e: KeyboardEvent) => {
       if (e.key !== "Delete" && e.key !== "Backspace") return;
-      if (editingId) return; // don't delete while typing
+      if (editingId) return;
 
-      // Delete selected text box
       if (selectedId) {
         const newTextBoxes = textBoxes.filter((tb) => tb.id !== selectedId);
         setTextBoxes(newTextBoxes);
         pushHistory(lines, newTextBoxes, stickyNotes);
+        await dbDeleteTextBox(selectedId);
+        savedTextBoxIds.current.delete(selectedId);
         setSelectedId(null);
         return;
       }
 
-      // Delete selected sticky note
       const selectedNote = stickyNotes.find((n) => n.isEditing);
       if (selectedNote) {
         const newNotes = stickyNotes.filter((n) => n.id !== selectedNote.id);
         setStickyNotes(newNotes);
         pushHistory(lines, textBoxes, newNotes);
+        await dbDeleteStickyNote(selectedNote.id);
       }
     };
 
@@ -226,6 +246,7 @@ const Canvas = ({
       const newNotes = [...stickyNotes, newNote];
       setStickyNotes(newNotes);
       pushHistory(lines, textBoxes, newNotes);
+      dbAddStickyNote(newNote);
       return;
     }
 
@@ -288,10 +309,19 @@ const Canvas = ({
       return [...prev.slice(0, -1), last];
     });
   };
-
-  const handleStageMouseUp = () => {
+  const handleStageMouseUp = async () => {
     if (isDrawing.current) {
-      pushHistory(lines, textBoxes, stickyNotes);
+      const finishedLine = lines[lines.length - 1];
+      const id = await dbAddLine(finishedLine);
+      setLines((prev) => {
+        const updated = [...prev];
+        const last = { ...updated[updated.length - 1] };
+        if (id) last.id = id;
+        updated[updated.length - 1] = last;
+        // Push history here with the updated array
+        pushHistory(updated, textBoxes, stickyNotes);
+        return updated;
+      });
     }
     isDrawing.current = false;
     isPanning.current = false;
@@ -308,27 +338,46 @@ const Canvas = ({
     const newWidth = Math.max(node.width() * node.scaleX(), MIN_WIDTH);
     node.scaleX(1);
     node.scaleY(1);
-    setTextBoxes((prev) =>
-      prev.map((tb) =>
-        tb.id === id
-          ? {
-              ...tb,
-              x: node.x(),
-              y: node.y(),
-              width: newWidth,
-              rotation: node.rotation(),
-            }
-          : tb,
-      ),
+    const updated = textBoxes.map((tb) =>
+      tb.id === id
+        ? {
+            ...tb,
+            x: node.x(),
+            y: node.y(),
+            width: newWidth,
+            rotation: node.rotation(),
+          }
+        : tb,
     );
+    setTextBoxes(updated);
+    const box = updated.find((tb) => tb.id === id);
+    if (box && savedTextBoxIds.current.has(id)) {
+      dbUpdateTextBox(box);
+    }
   };
 
-  const commitEdit = () => {
+  const commitEdit = async () => {
+    const box = textBoxes.find((tb) => tb.id === editingId);
     const updated = textBoxes.filter(
       (tb) => tb.id !== editingId || tb.text.trim() !== "",
     );
     setTextBoxes(updated);
     pushHistory(lines, updated, stickyNotes);
+
+    if (box) {
+      if (box.text.trim() === "") {
+        if (savedTextBoxIds.current.has(box.id)) {
+          await dbDeleteTextBox(box.id);
+          savedTextBoxIds.current.delete(box.id);
+        }
+      } else if (savedTextBoxIds.current.has(box.id)) {
+        await dbUpdateTextBox(box);
+      } else {
+        await dbAddTextBox(box);
+        savedTextBoxIds.current.add(box.id);
+      }
+    }
+
     setEditingId(null);
   };
 
@@ -342,7 +391,7 @@ const Canvas = ({
       <Toolbar onExport={handleExport} />
       <div
         ref={containerRef}
-        className="absolute bg-white   overflow-hidden"
+        className="absolute bg-white overflow-hidden"
         style={{
           left: 120,
           top: 40,
@@ -368,7 +417,7 @@ const Canvas = ({
           <Layer>
             {lines.map((line, i) => (
               <Line
-                key={i}
+                key={line.id ?? i}
                 points={line.points}
                 stroke={line.tool === "eraser" ? "#ffffff" : line.color}
                 strokeWidth={line.tool === "eraser" ? 30 : line.width}
@@ -403,15 +452,18 @@ const Canvas = ({
                     setEditingId(tb.id);
                     setSelectedId(null);
                   }}
-                  onDragEnd={(e) =>
-                    setTextBoxes((prev) =>
-                      prev.map((t) =>
-                        t.id === tb.id
-                          ? { ...t, x: e.target.x(), y: e.target.y() }
-                          : t,
-                      ),
-                    )
-                  }
+                  onDragEnd={(e) => {
+                    const updated = textBoxes.map((t) =>
+                      t.id === tb.id
+                        ? { ...t, x: e.target.x(), y: e.target.y() }
+                        : t,
+                    );
+                    setTextBoxes(updated);
+                    const box = updated.find((t) => t.id === tb.id);
+                    if (box && savedTextBoxIds.current.has(tb.id)) {
+                      dbUpdateTextBox(box);
+                    }
+                  }}
                   onTransformEnd={(e) => handleTransformEnd(e, tb.id)}
                 >
                   <Rect
@@ -502,6 +554,12 @@ const Canvas = ({
               };
 
               const onUp = () => {
+                // save position after drag
+                setStickyNotes((prev) => {
+                  const moved = prev.find((n) => n.id === note.id);
+                  if (moved) dbUpdateStickyNote(moved);
+                  return prev;
+                });
                 window.removeEventListener("mousemove", onMove);
                 window.removeEventListener("mouseup", onUp);
               };
@@ -515,13 +573,16 @@ const Canvas = ({
               initialContent={note.content}
               initialColor={note.color}
               readOnly={activeTool !== "select" || !note.isEditing}
-              onUpdate={(title, content) =>
-                setStickyNotes((prev) =>
-                  prev.map((n) =>
+              onUpdate={(title, content) => {
+                setStickyNotes((prev) => {
+                  const updated = prev.map((n) =>
                     n.id === note.id ? { ...n, title, content } : n,
-                  ),
-                )
-              }
+                  );
+                  const updatedNote = updated.find((n) => n.id === note.id);
+                  if (updatedNote) dbUpdateStickyNote(updatedNote);
+                  return updated;
+                });
+              }}
             />
           </div>
         ))}

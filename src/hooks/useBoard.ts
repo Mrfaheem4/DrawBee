@@ -15,17 +15,43 @@ export const useBoard = () => {
     if (!user) return;
 
     const urlParts = window.location.pathname.split("/");
-    const urlBoardId = urlParts[2];
+    // e.g. /board/BOARD_UUID  or  /invite/TOKEN
+    const segment = urlParts[1]; // "board" | "invite"
+    const value = urlParts[2]; // the UUID or token
 
-    if (urlBoardId) {
-      await joinBoard(urlBoardId, user.id);
-      setBoardId(urlBoardId);
+    // ── Invite link: /invite/TOKEN ──────────────────────────────────────────
+    if (segment === "invite" && value) {
+      const { data, error } = await supabase.rpc("join_whiteboard_via_token", {
+        p_token: value,
+      });
+
+      if (error || data?.error) {
+        console.error("Invalid or expired invite token:", error ?? data.error);
+        return;
+      }
+
+      const resolvedBoardId = data.whiteboard_id as string;
+      setBoardId(resolvedBoardId);
+
+      // Redirect to the clean board URL so refreshing works
+      window.history.replaceState(null, "", `/board/${resolvedBoardId}`);
       return;
     }
 
-    const userRes = await supabase.auth.getUser();
-    console.log("Current user:", userRes.data.user?.id);
+    // ── Direct board link: /board/BOARD_UUID ────────────────────────────────
+    if (segment === "board" && value) {
+      // Make sure the user is a member (they may already be)
+      await supabase
+        .from("whiteboard_members")
+        .upsert(
+          { whiteboard_id: value, user_id: user.id },
+          { onConflict: "whiteboard_id,user_id" },
+        );
+      setBoardId(value);
+      return;
+    }
 
+    // ── No board in URL: load or create the user's own board ─────────────────
     const { data: existing } = await supabase
       .from("whiteboards")
       .select("id")
@@ -43,35 +69,26 @@ export const useBoard = () => {
       return;
     }
 
-    const { data, error } = await supabase
+    // ── First time: create a new board ───────────────────────────────────────
+    const { data: created, error: createError } = await supabase
       .from("whiteboards")
       .insert({ name: "My Board", owner_id: user.id })
       .select()
       .single();
 
-    if (error) {
-      console.error(error);
+    if (createError) {
+      console.error("Error creating board:", createError);
       return;
     }
 
     await supabase
       .from("whiteboard_members")
       .upsert(
-        { whiteboard_id: data.id, user_id: user.id },
+        { whiteboard_id: created.id, user_id: user.id },
         { onConflict: "whiteboard_id,user_id" },
       );
-    setBoardId(data.id);
-  };
 
-  const joinBoard = async (boardId: string, userId: string) => {
-    const { error } = await supabase
-      .from("whiteboard_members")
-      .upsert(
-        { whiteboard_id: boardId, user_id: userId },
-        { onConflict: "whiteboard_id,user_id" },
-      );
-    if (error) console.error("Error joining board:", error);
-    else console.log("Joined board ✅");
+    setBoardId(created.id);
   };
 
   return { boardId };

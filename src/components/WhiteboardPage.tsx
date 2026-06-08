@@ -18,7 +18,15 @@ const WhiteboardPage = () => {
     redo,
     canUndo,
     canRedo,
-  } = useWhiteboard(boardId); // ← pass boardId here
+    dbAddLine,
+    dbDeleteLine,
+    dbAddTextBox,
+    dbUpdateTextBox,
+    dbDeleteTextBox,
+    dbAddStickyNote,
+    dbUpdateStickyNote,
+    dbDeleteStickyNote,
+  } = useWhiteboard(boardId);
 
   return (
     <div className="w-full h-full flex flex-col">
@@ -38,6 +46,14 @@ const WhiteboardPage = () => {
           stickyNotes={stickyNotes}
           setStickyNotes={setStickyNotes}
           pushHistory={pushHistory}
+          dbAddLine={dbAddLine}
+          dbDeleteLine={dbDeleteLine}
+          dbAddTextBox={dbAddTextBox}
+          dbUpdateTextBox={dbUpdateTextBox}
+          dbDeleteTextBox={dbDeleteTextBox}
+          dbAddStickyNote={dbAddStickyNote}
+          dbUpdateStickyNote={dbUpdateStickyNote}
+          dbDeleteStickyNote={dbDeleteStickyNote}
         />
       </div>
     </div>
